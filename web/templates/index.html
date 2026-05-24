@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>吉康 AI 推广工作流</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="toast-container" id="toasts"></div>
+<div class="dialog-overlay hide" id="rejectDialog">
+  <div class="dialog-box">
+    <h3>驳回原因</h3>
+    <textarea id="rejectReason" placeholder="请输入驳回原因（必填）..."></textarea>
+    <div class="dialog-actions">
+      <button class="dialog-cancel" onclick="closeRejectDialog()">取消</button>
+      <button class="dialog-confirm" onclick="confirmReject()">确认驳回</button>
+    </div>
+  </div>
+</div>
+
+<button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<div class="app">
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <h1>吉康 AI</h1>
+    <span class="ver">v5</span>
+  </div>
+  <button class="btn-new" onclick="newSession()">+ 新建会话</button>
+  <button class="btn-export" onclick="exportApproved()">&#128229; 导出已审核</button>
+  <div class="search-box">
+    <span class="search-icon">&#128269;</span>
+    <input type="text" id="searchInput" placeholder="搜索历史会话..." oninput="loadSessions()">
+  </div>
+  <div class="stats" id="statsBox">
+    <span>累计 <span class="val" id="statTotal">-</span></span>
+    <span>均分 <span class="val" id="statAvg">-</span></span>
+    <span>今日 <span class="val" id="statToday">-</span></span>
+    <span>待审 <span class="val pending" id="statPending">-</span></span>
+    <span>Token <span class="val" id="statTokens">-</span></span>
+  </div>
+  <div class="slist" id="sessionList"></div>
+
+  <div class="perf-dashboard" id="perfDashboard">
+    <div class="perf-dash-header" onclick="document.getElementById('perfDashBody').classList.toggle('hide')">&#128200; 效果概览</div>
+    <div id="perfDashBody"></div>
+  </div>
+
+  <div class="review-panel" id="reviewPanel">
+    <div class="review-header" onclick="toggleReview()">
+      <span>&#128220; 待审核</span>
+      <span class="badge-count zero" id="pendingCount">0</span>
+    </div>
+    <div class="review-list hide" id="reviewList"></div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div class="mode-group" id="modeGroup">
+      <button class="mode-btn on" data-mode="now" onclick="setMode('now')">&#9889; 立即生成</button>
+      <button class="mode-btn" data-mode="once" onclick="setMode('once')">&#9200; 定时一次</button>
+      <button class="mode-btn" data-mode="cron" onclick="setMode('cron')">&#128260; 周期重复</button>
+    </div>
+    <span id="timeCfg" class="time-cfg hide">
+      <select id="sY"></select>年 <select id="sM"></select>月 <select id="sD"></select>日
+      <select id="sH"></select>:<select id="sMin"></select>
+      <button class="btn-sm primary" onclick="scheduleOnce()">确认定时</button>
+    </span>
+    <span id="cronCfg" class="hide" style="display:flex;gap:6px;align-items:center">
+      <select id="cronP">
+        <option value="0 9 * * *">每天 9:00</option>
+        <option value="0 14 * * *">每天 14:00</option>
+        <option value="0 9 * * 1-5">工作日 9:00</option>
+        <option value="0 9 * * 1">每周一 9:00</option>
+      </select>
+      <button class="btn-sm primary" onclick="scheduleCron()">确认周期</button>
+    </span>
+    <label class="toggle-row" title="跳过数据版和故事版">
+      <input type="checkbox" id="fastMode" onchange="updateFastHint()"><span>&#9889; 快速</span>
+    </label>
+    <span class="filter-group" id="filterGroup">
+      <select id="filterType" onchange="loadSessions()">
+        <option value="">全部类型</option>
+        <option value="tech">技术讲解</option>
+        <option value="policy">政策解读</option>
+        <option value="event">事件报道</option>
+      </select>
+      <input type="date" id="filterDateFrom" onchange="loadSessions()" title="开始日期">
+      <input type="date" id="filterDateTo" onchange="loadSessions()" title="结束日期">
+      <button class="filter-btn" onclick="loadSessions()">筛选</button>
+      <button class="filter-btn" onclick="resetFilters()">重置</button>
+    </span>
+    <button class="cal-btn" onclick="toggleCalendar()">&#128197; 日历</button>
+    <div class="jobs-bar" id="jobsBar"></div>
+    <div class="calendar-dropdown hide" id="calendarDropdown"></div>
+  </div>
+
+  <div class="chat" id="chatBox">
+    <div class="welcome" id="welcomeScreen">
+      <div class="icon">&#x1f4dd;</div>
+      <h2 id="welcomeTitle">开始撰写推广文</h2>
+      <p id="welcomeDesc">输入主题，AI 将自动完成内容类型识别、行业信息采集、多版本生成和评审排序。</p>
+      <div class="quick-topics" id="quickTopics">
+        <span class="quick-tag" onclick="quickSend('低温除湿干化技术原理解析')">低温干化技术原理</span>
+        <span class="quick-tag" onclick="quickSend('污泥处置新标准解读')">污泥处置新标准</span>
+        <span class="quick-tag" onclick="quickSend('吉康环境行业展会参展纪要')">行业展会纪要</span>
+        <span class="quick-tag" onclick="quickSend('热泵干化设备选型指南')">设备选型指南</span>
+        <span class="quick-tag" onclick="quickSend('环保排放政策对企业的影响')">环保政策解读</span>
+        <span class="quick-tag" onclick="quickSend('污泥干化经济效益分析')">经济效益分析</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="ibar">
+    <textarea id="input" placeholder="输入推广主题，按 Enter 发送，Shift+Enter 换行..." rows="1"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"></textarea>
+    <select id="modelSel">
+      <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+      <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+      <option value="deepseek-chat">DeepSeek Chat</option>
+    </select>
+    <button class="btn btn-go" id="sendBtn" onclick="send()">&#10148; 发送</button>
+    <button class="btn btn-stop hide" id="stopBtn" onclick="doStop()">&#9724; 停止</button>
+  </div>
+</main>
+</div><script>
+var state = {
+  sid: null, loading: false, mode: 'now', sessions: [], versions: {},
+  reviewOpen: true, activePopover: null, rejectSid: null, configOK: true,
+  lastTopic: null,
+};
+
+(function init() {
+  buildTimeSelects();
+  checkConfig();
+  loadSessions(); loadJobs(); loadStats(); loadPendingReviews(); loadPerfDashboard();
+  setInterval(function() { loadJobs(); loadStats(); loadPendingReviews(); loadPerfDashboard(); }, 30000);
+  document.addEventListener('click', function(e) {
+    if (state.activePopover && !e.target.closest('.perf-popover') && !e.target.closest('.perf-btn')) closePopover();
+  });
+})();
+
+function buildTimeSelects() {
+  var now = new Date(), y = now.getFullYear();
+  function fill(id, vals, def) {
+    var s = document.getElementById(id);
+    vals.forEach(function(v) {
+      var o = document.createElement('option'); o.value = v; o.textContent = v;
+      if (v == def) o.selected = true; s.appendChild(o);
+    });
+  }
+  fill('sY', [y, y+1, y+2], y);
+  fill('sM', Array.from({length:12},function(_,i){return i+1}), now.getMonth()+1);
+  fill('sD', Array.from({length:31},function(_,i){return i+1}), now.getDate());
+  fill('sH', Array.from({length:24},function(_,i){return String(i).padStart(2,'0')}), '09');
+  fill('sMin', [0,5,10,15,20,25,30,35,40,45,50,55], 0);
+}
+
+// ============================================================
+// Config check
+// ============================================================
+function checkConfig() {
+  fetch('/api/config/status')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.ok) {
+        state.configOK = false;
+        var h = '<div class="setup-guide">'
+          + '<div class="icon">&#9888;&#65039;</div>'
+          + '<h2>配置未完成</h2>'
+          + '<div class="issue-list">';
+        d.issues.forEach(function(iss) {
+          h += '<div class="issue-item">' + esc(iss) + '</div>';
+        });
+        h += '</div>'
+          + '<div class="guide-note">请编辑项目根目录的 <code>.env</code> 文件，参考 <code>.env.example</code> 填写必要配置后重启服务。</div>'
+          + '</div>';
+        document.getElementById('chatBox').innerHTML = h;
+        document.getElementById('sendBtn').disabled = true;
+      } else {
+        document.getElementById('sendBtn').disabled = false;
+      }
+    });
+}
+
+// ============================================================
+// Mode / Toast
+// ============================================================
+function setMode(m) {
+  state.mode = m;
+  document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.toggle('on', b.dataset.mode === m); });
+  document.getElementById('timeCfg').classList.toggle('hide', m !== 'once');
+  document.getElementById('cronCfg').classList.toggle('hide', m !== 'cron');
+}
+function updateFastHint() {
+  document.getElementById('sendBtn').textContent = document.getElementById('fastMode').checked ? '⚡ 快速发送' : '➤ 发送';
+}
+function toast(msg, type) {
+  type = type || 'success';
+  var c = document.getElementById('toasts'), el = document.createElement('div');
+  el.className = 'toast ' + type; el.textContent = msg; c.appendChild(el);
+  setTimeout(function() { el.remove(); }, 3000);
+}
+
+// ============================================================
+// Sessions
+// ============================================================
+function loadSessions() {
+  var type = document.getElementById('filterType').value;
+  var from = document.getElementById('filterDateFrom').value;
+  var to = document.getElementById('filterDateTo').value;
+  var q = document.getElementById('searchInput').value.trim();
+  var params = new URLSearchParams();
+  if (type) params.set('content_type', type);
+  if (from) params.set('date_from', from);
+  if (to) params.set('date_to', to);
+  if (q) params.set('q', q);
+  var url = '/api/sessions' + (params.toString() ? '?' + params.toString() : '');
+  fetch(url).then(function(r) { return r.json(); })
+    .then(function(d) { state.sessions = d.sessions || []; renderSessions(state.sessions); });
+}
+
+function renderSessions(list) {
+  var h = '';
+  (list || []).forEach(function(s) {
+    h += '<div class="sitem' + (s.id === state.sid ? ' on' : '') + '" onclick="openSession(\'' + s.id + '\')">'
+      + '<div class="title">' + esc(s.title) + '</div>'
+      + '<div class="meta"><span>' + (s.created_at||'').slice(0,10) + '</span><span class="sess-type">' + (s.content_type||'-') + '</span>'
+      + '<span class="meta-actions">'
+      + '<button class="perf-btn" title="效果数据" onclick="event.stopPropagation();showPerfPopover(\'' + s.id + '\',this)">&#128202;</button>'
+      + '<span class="del" onclick="event.stopPropagation();deleteSession(\'' + s.id + '\')">删除</span>'
+      + '</span></div></div>';
+  });
+  document.getElementById('sessionList').innerHTML = h
+    || '<div style="padding:16px;color:var(--ts);font-size:12px;text-align:center">暂无历史会话</div>';
+}
+
+function loadStats() {
+  fetch('/api/stats').then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('statTotal').textContent = d.total || 0;
+      document.getElementById('statAvg').textContent = d.avg_score || 0;
+      document.getElementById('statToday').textContent = d.today || 0;
+      document.getElementById('statPending').textContent = d.pending || 0;
+      var tk = d.total_tokens || 0;
+      var cost = d.estimated_cost || 0;
+      document.getElementById('statTokens').textContent = (tk > 1000 ? (tk/1000).toFixed(0)+'k' : tk) + ' (¥' + cost.toFixed(1) + ')';
+    });
+}
+
+function loadJobs() {
+  fetch('/api/schedule/list').then(function(r) { return r.json(); })
+    .then(function(d) {
+      var h = '';
+      (d.jobs||[]).forEach(function(j) {
+        h += '<span class="job-tag">&#9200; '+(j.next||'').slice(0,16)+' <span class="jcancel" onclick="cancelJob(\''+j.id+'\')">x</span></span>';
+      });
+      document.getElementById('jobsBar').innerHTML = h;
+    });
+}
+
+function newSession() {
+  state.sid = null; document.getElementById('chatBox').innerHTML = ''; showWelcome();
+  document.getElementById('input').focus(); loadSessions();
+}
+function openSession(sid) {
+  state.sid = sid;
+  document.getElementById('chatBox').innerHTML = '<div style="text-align:center;color:var(--ts);padding:40px">加载中...</div>';
+  fetch('/api/sessions/'+sid).then(function(r){return r.json()}).then(function(d){
+    var h='';
+    (d.messages||[]).forEach(function(m){
+      if(m.role==='user') h+='<div class="msg user">'+esc(m.content)+'</div>';
+      else h+=renderAgentMsg(m);
+    });
+    document.getElementById('chatBox').innerHTML=h||'<div class="welcome"><p>空会话</p></div>';
+    document.getElementById('chatBox').scrollTop=document.getElementById('chatBox').scrollHeight;
+  }).catch(function(){document.getElementById('chatBox').innerHTML='<div style="color:var(--r);padding:40px;text-align:center">加载失败</div>'});
+}
+function deleteSession(sid){if(!confirm('确认删除？'))return;fetch('/api/sessions/'+sid,{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已删除');loadSessions();loadStats();}})}
+function cancelJob(jid){
+  fetch('/api/schedule/cancel',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({job_id:jid})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已取消');loadJobs();}});
+}
+function resetFilters(){document.getElementById('filterType').value='';document.getElementById('filterDateFrom').value='';document.getElementById('filterDateTo').value='';document.getElementById('searchInput').value='';loadSessions();}
+
+// ============================================================
+// Review
+// ============================================================
+function showReviewBody(sid, el) {
+  var preview = el.querySelector('.review-body-preview');
+  if (!preview) {
+    preview = document.createElement('div');
+    preview.className = 'review-body-preview';
+    preview.textContent = '加载中...';
+    el.appendChild(preview);
+    fetch('/api/review/' + sid + '/body')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        preview.textContent = d.body || '(无内容)';
+        preview.classList.add('open');
+      })
+      .catch(function() { preview.textContent = '加载失败'; });
+  }
+  preview.classList.toggle('open');
+}
+
+function loadPendingReviews() {
+  fetch('/api/review/pending').then(function(r){return r.json()}).then(function(d){
+    var items = d.pending||[];
+    document.getElementById('pendingCount').textContent = items.length;
+    document.getElementById('pendingCount').classList.toggle('zero', items.length===0);
+    var h='';
+    items.forEach(function(item){
+      h+='<div class="review-item" onclick="showReviewBody(\''+item.id+'\',this)">'
+        +'<div class="r-title">'+esc(item.title||'（无标题）')+'</div>'
+        +'<div class="r-meta"><span>'+esc(item.content_type||'-')+'</span><span>&#11088; '+(item.score||'-')+'</span></div>'
+        +'<div class="r-actions">'
+        +'<button class="r-btn approve" onclick="event.stopPropagation();approveOne(\''+item.id+'\')">&#10003; 通过</button>'
+        +'<button class="r-btn reject" onclick="event.stopPropagation();openRejectDialog(\''+item.id+'\')">&#10007; 驳回</button>'
+        +'<button class="r-btn regen" onclick="event.stopPropagation();regenOne(\''+item.id+'\')">&#8634; 重新生成</button>'
+        +'</div></div>';
+    });
+    document.getElementById('reviewList').innerHTML=h||'<div style="padding:8px;color:var(--ts);font-size:10px;text-align:center">暂无待审核</div>';
+  });
+}
+function toggleReview(){state.reviewOpen=!state.reviewOpen;document.getElementById('reviewList').classList.toggle('hide',!state.reviewOpen);}
+function approveOne(sid){
+  fetch('/api/review/approve',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({session_id:sid})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已通过');loadPendingReviews();loadSessions();loadStats();}});
+}
+function openRejectDialog(sid){state.rejectSid=sid;document.getElementById('rejectReason').value='';document.getElementById('rejectDialog').classList.remove('hide');}
+function closeRejectDialog(){state.rejectSid=null;document.getElementById('rejectDialog').classList.add('hide');}
+function confirmReject(){
+  var reason=document.getElementById('rejectReason').value.trim();
+  if(!reason){toast('请输入驳回原因','error');return;}
+  fetch('/api/review/reject',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({session_id:state.rejectSid,reason:reason})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已驳回');closeRejectDialog();loadPendingReviews();loadSessions();loadStats();}});
+}
+function regenOne(sid){
+  fetch('/api/review/regen',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({session_id:sid})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已提交重新生成，完成后请刷新查看');loadPendingReviews();}});
+}
+
+// ============================================================
+// Perf Dashboard
+// ============================================================
+function loadPerfDashboard() {
+  fetch('/api/performance/stats').then(function(r){return r.json()}).then(function(d){
+    var types=d.by_type||[];
+    var h='';
+    var maxReads=1;
+    types.forEach(function(t){maxReads=Math.max(maxReads,t.avg_reads||0);});
+    types.forEach(function(t){
+      var pct=Math.round((t.avg_reads||0)/maxReads*100);
+      h+='<div class="perf-dash-row">'
+        +'<span class="perf-dash-label">'+esc(t.content_type||'-')+'</span>'
+        +'<div class="perf-dash-bar-track"><div class="perf-dash-bar-fill" style="width:'+pct+'%"></div></div>'
+        +'<span class="perf-dash-val">'+(t.avg_reads||0).toFixed(0)+'阅</span>'
+        +'</div>';
+    });
+    document.getElementById('perfDashBody').innerHTML=h||'<div style="font-size:10px;color:var(--ts);padding:4px 0">暂无效果数据</div>';
+  });
+}
+
+// ============================================================
+// Calendar
+// ============================================================
+function toggleCalendar(){
+  var dd=document.getElementById('calendarDropdown');
+  if(dd.classList.contains('hide')){
+    fetch('/api/calendar').then(function(r){return r.json()}).then(function(d){
+      var h='<div class="cal-add-row"><input id="calNewDate" type="date" value="'+new Date().toISOString().slice(0,10)+'" style="padding:4px 6px;font-size:11px;border:1px solid var(--b);border-radius:4px;width:115px">'
+        +'<input id="calNewTopic" placeholder="主题" style="padding:4px 6px;font-size:11px;border:1px solid var(--b);border-radius:4px;flex:1">'
+        +'<select id="calNewType" style="padding:4px;font-size:10px;border:1px solid var(--b);border-radius:4px"><option value="tech">技术</option><option value="policy">政策</option><option value="event">事件</option></select>'
+        +'<button onclick="calAdd()" style="padding:4px 8px;background:var(--p);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:10px">+</button></div>';
+      (d.items||[]).forEach(function(item){
+        h+='<div class="cal-item'+(item.done?' done':'')+(item.priority==='high'?' priority-high':'')+'" title="点击编辑">'
+          +'<span class="cal-date">'+item.date.slice(5)+'</span>'
+          +'<span class="cal-topic" contenteditable="true" onblur="calUpdate(\''+item.date+'\',this.textContent,\''+item.type+'\')">'+esc(item.topic)+'</span>'
+          +'<select onchange="calUpdate(\''+item.date+'\',\'\',this.value)" style="font-size:9px;border:1px solid var(--b);border-radius:3px;padding:1px 2px">'
+            +'<option value="tech"'+(item.type==='tech'?' selected':'')+'>技术</option>'
+            +'<option value="policy"'+(item.type==='policy'?' selected':'')+'>政策</option>'
+            +'<option value="event"'+(item.type==='event'?' selected':'')+'>事件</option>'
+          +'</select>'
+          +'<span class="cal-del" onclick="event.stopPropagation();calDelete(\''+item.date+'\')" title="删除">x</span>'
+          +'</div>';
+      });
+      dd.innerHTML=h||'<div style="padding:8px;color:var(--ts);font-size:11px;text-align:center">近期无排期</div>';
+    });
+    dd.classList.remove('hide');
+  }else{dd.classList.add('hide');}
+}
+
+function calAdd(){
+  var d=document.getElementById('calNewDate').value;
+  var t=document.getElementById('calNewTopic').value.trim();
+  var tp=document.getElementById('calNewType').value;
+  if(!d||!t){toast('请填写日期和主题','error');return;}
+  fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:d,topic:t,type:tp})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已添加');toggleCalendar();toggleCalendar();}});
+}
+function calUpdate(date,topic,type){
+  var params=new URLSearchParams({date:date});
+  if(topic)params.set('topic',topic);
+  if(type)params.set('type',type);
+  fetch('/api/calendar',{method:'PUT',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok)toast('已更新');});
+}
+function calDelete(date){
+  if(!confirm('删除 '+date+' 的排期？'))return;
+  fetch('/api/calendar',{method:'DELETE',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:date})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已删除');toggleCalendar();toggleCalendar();}});
+}
+
+// ============================================================
+// Export
+// ============================================================
+function exportApproved(){
+  fetch('/api/export?format=txt').then(function(r){return r.text()}).then(function(txt){
+    navigator.clipboard.writeText(
+      txt.replace(/<pre>/g,'').replace(/<\/pre>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')
+    ).then(function(){toast('已复制到剪贴板');});
+  });
+}
+
+// ============================================================
+// Hamburger
+// ============================================================
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+// ============================================================
+// Perf Popover
+// ============================================================
+function showPerfPopover(sid, btn) {
+  if (state.activePopover) closePopover();
+  state.activePopover = sid;
+  fetch('/api/performance/'+sid).then(function(r){return r.json()}).then(function(d){
+    var pop = document.createElement('div');
+    pop.className = 'perf-popover'; pop.id = 'perfPopover-'+sid;
+    pop.innerHTML =
+      '<label>阅读数</label><input type="number" id="perfReads-'+sid+'" value="'+(d.reads||0)+'" min="0">'
+      +'<label>分享数</label><input type="number" id="perfShares-'+sid+'" value="'+(d.shares||0)+'" min="0">'
+      +'<label>点赞数</label><input type="number" id="perfLikes-'+sid+'" value="'+(d.likes||0)+'" min="0">'
+      +'<button class="perf-save" onclick="savePerformance(\''+sid+'\')">保存数据</button>';
+    btn.parentElement.parentElement.appendChild(pop);
+  });
+}
+function savePerformance(sid) {
+  var r=document.getElementById('perfReads-'+sid).value||0;
+  var s=document.getElementById('perfShares-'+sid).value||0;
+  var l=document.getElementById('perfLikes-'+sid).value||0;
+  fetch('/api/performance',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({session_id:sid,reads:r,shares:s,likes:l})})
+    .then(function(resp){return resp.json()}).then(function(d){if(d.ok){toast('已保存');closePopover();loadPerfDashboard();}else{toast('保存失败','error');}});
+}
+function closePopover(){if(state.activePopover){var el=document.getElementById('perfPopover-'+state.activePopover);if(el)el.remove();state.activePopover=null;}}
+
+// ============================================================
+// Chat / Messages
+// ============================================================
+function showWelcome(){
+  if(!state.configOK) return;
+  document.getElementById('chatBox').innerHTML =
+    '<div class="welcome" id="welcomeScreen"><div class="icon">&#x1f4dd;</div><h2>开始撰写推广文</h2>'
+    +'<p>输入主题，AI 将自动完成内容类型识别、行业信息采集、多版本生成和评审排序。</p>'
+    +'<div class="quick-topics">'
+    +'<span class="quick-tag" onclick="quickSend(\'低温除湿干化技术原理解析\')">低温干化技术原理</span>'
+    +'<span class="quick-tag" onclick="quickSend(\'污泥处置新标准解读\')">污泥处置新标准</span>'
+    +'<span class="quick-tag" onclick="quickSend(\'吉康环境行业展会参展纪要\')">行业展会纪要</span>'
+    +'<span class="quick-tag" onclick="quickSend(\'热泵干化设备选型指南\')">设备选型指南</span>'
+    +'<span class="quick-tag" onclick="quickSend(\'环保排放政策对企业的影响\')">环保政策解读</span>'
+    +'<span class="quick-tag" onclick="quickSend(\'污泥干化经济效益分析\')">经济效益分析</span>'
+    +'</div></div>';
+}
+function quickSend(topic){document.getElementById('input').value=topic;send();}
+function addUserMsg(text){
+  var el=document.createElement('div');el.className='msg user';el.textContent=text;
+  document.getElementById('chatBox').appendChild(el);
+  document.getElementById('chatBox').scrollTop=document.getElementById('chatBox').scrollHeight;
+}
+function addProgressCard(){
+  var el=document.createElement('div');el.className='progress-card';el.id='progressCard';
+  el.innerHTML='<div class="stage" id="stageText">启动</div><div class="progress-bar-track"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>';
+  document.getElementById('chatBox').appendChild(el);
+  document.getElementById('chatBox').scrollTop=document.getElementById('chatBox').scrollHeight;
+}
+var _pStages=['启动','类型识别','RAG检索','抓取','研究员','生成','评审','图片','完成'],_pIdx=0;
+function updateProgress(stageText){
+  _pIdx=Math.min(_pIdx+1,_pStages.length-1);
+  var pct=Math.round((_pIdx/(_pStages.length-1))*100);
+  var st=document.getElementById('stageText'),pb=document.getElementById('progressBar');
+  if(st)st.textContent=stageText;if(pb)pb.style.width=pct+'%';
+}
+function removeProgress(){var p=document.getElementById('progressCard');if(p)p.remove();}
+
+function finalizeResult(data){
+  removeProgress();
+  var box=document.getElementById('chatBox'),el=document.createElement('div');
+  el.className='msg agent';var msgId='msg-'+Date.now();
+  var tabsHtml='',versionData={};
+  if(data.versions&&data.versions.length>1){
+    tabsHtml='<div class="version-tabs">';
+    data.versions.forEach(function(v,i){
+      var active=v.title===data.title?' on':'';
+      tabsHtml+='<button class="version-tab'+active+'" onclick="switchVersion(\''+msgId+'\','+i+')">'+esc(v.style)+'</button>';
+      versionData[i]=v;
+    });
+    tabsHtml+='</div>';state.versions[msgId]=versionData;
+  }
+  el.id=msgId;
+  el.innerHTML=
+    '<div class="title">'+esc(data.title||'')+'</div>'
+    +'<div class="body article-body" id="'+msgId+'-body">'+renderMarkdown(data.body||'')+'</div>'
+    +tabsHtml
+    +(data.image_url?'<img src="'+data.image_url+'" class="article-img" onerror="this.style.display=\'none\'">':'')+'<div class="meta-row">'
+      +'<span class="badge score">&#11088; '+(data.score||'-')+' 分</span>'
+      +'<span class="badge type">'+esc(data.content_type||'-')+'</span>'
+      +'<span class="badge scrape">&#127760; '+esc(data.scrape||'-')+'</span>'
+      +'<span class="badge time">&#9202; '+(data.elapsed||'-')+'s</span>'
+    +'</div>'
+    +'<div class="actions">'
+      +'<button class="action-btn" onclick="copyContent(\''+msgId+'\',this)">&#128203; 复制全文</button>'
+      +'<button class="action-btn" onclick="toggleExpand(\''+msgId+'\',this)">&#128065; 展开</button>'
+      +'<button class="action-btn" onclick="feedback(\'扩写\')">&#128221; 扩写</button>'
+      +'<button class="action-btn" onclick="feedback(\'换政策角度\')">&#128220; 政策角度</button>'
+      +'<button class="action-btn" onclick="feedback(\'换技术角度\')">&#9881; 技术角度</button>'
+      +'<button class="action-btn" onclick="toggleCustomFb(\''+msgId+'\')">&#128172; 自定义</button>'
+    +'</div>'
+    +'<div class="custom-feedback-wrap" id="cfb-'+msgId+'">'
+      +'<input id="cfbInput-'+msgId+'" placeholder="输入自定义反馈...">'
+      +'<button class="send-fb" onclick="sendCustomFb(\''+msgId+'\')">发送</button>'
+    +'</div>';
+  box.appendChild(el);box.scrollTop=box.scrollHeight;
+}
+
+function toggleCustomFb(msgId){
+  document.getElementById('cfb-'+msgId).classList.toggle('open');
+  var inp=document.getElementById('cfbInput-'+msgId);if(inp)inp.focus();
+}
+function sendCustomFb(msgId){
+  var inp=document.getElementById('cfbInput-'+msgId);if(!inp)return;
+  var fb=inp.value.trim();if(!fb)return;
+  inp.value='';
+  if(!state.lastTopic){toast('请先生成一篇文章','error');return;}
+  document.getElementById('input').value=fb;
+  var isFeedback=true;
+  if(state.loading||!state.configOK)return;
+  var topic=fb;
+  setLoading(true);addUserMsg('💬 反馈: '+topic);_pIdx=0;addProgressCard();
+  var fast=document.getElementById('fastMode').checked?'1':'0';
+  var params=new URLSearchParams({topic:state.lastTopic,model:document.getElementById('modelSel').value,fast:fast,feedback:topic,keywords:topic});
+  fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params})
+    .then(function(r){
+      var reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
+      function pump(){reader.read().then(function(v){
+        if(v.done){setLoading(false);return;}
+        buf+=decoder.decode(v.value,{stream:true});var lines=buf.split('\n');buf=lines.pop();
+        lines.forEach(function(l){if(!l.startsWith('data: '))return;
+          try{var d=JSON.parse(l.slice(6));if(d.stage)updateProgress(d.stage);else if(d.done){finalizeResult(d);loadSessions();loadStats();}}
+          catch(e){}
+        });pump();
+      }).catch(function(err){removeProgress();setLoading(false);toast('请求失败: '+(err.message||'未知错误'),'error');});}
+      pump();
+    }).catch(function(err){removeProgress();setLoading(false);toast('网络请求失败','error');});
+}
+
+function switchVersion(msgId,idx){
+  var v=state.versions[msgId]&&state.versions[msgId][idx];if(!v)return;
+  var el=document.getElementById(msgId);if(!el)return;
+  el.querySelector('.title').textContent=v.title;
+  var body=el.querySelector('.body');body.textContent=v.body||'';body.classList.remove('expanded');
+  el.querySelectorAll('.version-tab').forEach(function(t,i){t.classList.toggle('on',i===idx);});
+  var sb=el.querySelector('.badge.score');if(sb)sb.textContent='⭐ '+(v.score||'-')+' 分';
+  el.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function copyContent(msgId,btn){
+  var body=document.getElementById(msgId+'-body'),title=document.getElementById(msgId).querySelector('.title');
+  var text=(title?title.textContent+'\n\n':'')+(body?body.textContent:'');
+  navigator.clipboard.writeText(text).then(function(){
+    btn.classList.add('copy-ok');btn.innerHTML='&#10003; 已复制';
+    setTimeout(function(){btn.classList.remove('copy-ok');btn.innerHTML='&#128203; 复制全文';},2000);
+  });
+}
+function toggleExpand(msgId,btn){
+  var expanded=document.getElementById(msgId+'-body').classList.toggle('expanded');
+  btn.textContent=expanded?'&#128064; 收起':'&#128065; 展开';
+}
+function feedback(action){document.getElementById('input').value=action;send();}
+
+function renderAgentMsg(m){
+  var title=m.content||m.title||'（无标题）',body=m.body||'（内容暂无）',msgId='hist-'+(m.created_at||Date.now());
+  return '<div class="msg agent" id="'+msgId+'">'
+    +'<div class="title">'+esc(title)+'</div><div class="body article-body">'+renderMarkdown(body)+'</div>'
+    +'<div class="meta-row"><span class="badge score">&#11088; '+(m.score||'-')+' 分</span><span class="badge type">'+esc(m.content_type||'-')+'</span></div>'
+    +'<div class="actions">'
+      +'<button class="action-btn" onclick="copyHistory(\''+msgId+'\',this)">&#128203; 复制全文</button>'
+      +'<button class="action-btn" onclick="feedback(\'扩写\')">&#128221; 扩写</button>'
+      +'<button class="action-btn" onclick="feedback(\'换技术角度\')">&#9881; 技术角度</button>'
+    +'</div></div>';
+}
+
+// ============================================================
+// Send / Stream
+// ============================================================
+function setLoading(v){
+  state.loading=v;document.getElementById('sendBtn').classList.toggle('hide',v);
+  document.getElementById('stopBtn').classList.toggle('hide',!v);document.getElementById('input').disabled=v;
+}
+function send(){
+  if(state.loading||!state.configOK)return;
+  var inp=document.getElementById('input'),topic=inp.value.trim();if(!topic)return;
+  if(state.mode==='once'){scheduleOnce();return;}if(state.mode==='cron'){scheduleCron();return;}
+  var isFeedback=!!state.lastTopic && (topic==='扩写'||topic==='换政策角度'||topic==='换技术角度'||topic==='太短了');
+  if(!isFeedback) state.lastTopic=topic;
+  setLoading(true);addUserMsg(topic);inp.value='';_pIdx=0;addProgressCard();
+  var fast=document.getElementById('fastMode').checked?'1':'0';
+  var params=new URLSearchParams({topic:state.lastTopic||topic,model:document.getElementById('modelSel').value,fast:fast});
+  if(isFeedback) params.set('feedback',topic);
+  if(isFeedback) params.set('keywords',topic);
+  fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params})
+    .then(function(r){
+      var reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
+      function pump(){reader.read().then(function(v){
+        if(v.done){setLoading(false);return;}
+        buf+=decoder.decode(v.value,{stream:true});var lines=buf.split('\n');buf=lines.pop();
+        lines.forEach(function(l){if(!l.startsWith('data: '))return;
+          try{var d=JSON.parse(l.slice(6));if(d.stage)updateProgress(d.stage);else if(d.done){finalizeResult(d);loadSessions();loadStats();}}
+          catch(e){}
+        });pump();
+      }).catch(function(err){removeProgress();setLoading(false);toast('请求失败: '+(err.message||'未知错误'),'error');});}
+      pump();
+    }).catch(function(err){removeProgress();setLoading(false);toast('网络请求失败','error');});
+}
+function doStop(){fetch('/api/stop',{method:'POST'});setLoading(false);removeProgress();}
+
+// ============================================================
+// Schedule
+// ============================================================
+function getFireAt(){
+  return document.getElementById('sY').value+'-'+String(document.getElementById('sM').value).padStart(2,'0')+'-'
+    +String(document.getElementById('sD').value).padStart(2,'0')+'T'+document.getElementById('sH').value+':'
+    +document.getElementById('sMin').value+':00+08:00';
+}
+function scheduleOnce(){
+  var t=document.getElementById('input').value.trim();if(!t){toast('请输入主题','error');return;}
+  fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({topic:t,model:document.getElementById('modelSel').value,fire_at:getFireAt()})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('定时任务已创建');loadJobs();}else toast('创建失败','error');})
+    .catch(function(){toast('请求失败','error');});
+}
+function scheduleCron(){
+  var t=document.getElementById('input').value.trim();if(!t){toast('请输入主题','error');return;}
+  fetch('/api/schedule/cron',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({topic:t,model:document.getElementById('modelSel').value,cron:document.getElementById('cronP').value})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('周期任务已创建');loadJobs();}else toast('创建失败','error');})
+    .catch(function(){toast('请求失败','error');});
+}
+
+// ============================================================
+// Utilities
+// ============================================================
+function copyHistory(msgId,btn){
+  var el=document.getElementById(msgId),title=el.querySelector('.title').textContent,body=el.querySelector('.body').textContent;
+  navigator.clipboard.writeText(title+'\n\n'+body).then(function(){
+    btn.classList.add('copy-ok');btn.innerHTML='&#10003; 已复制';
+    setTimeout(function(){btn.classList.remove('copy-ok');btn.innerHTML='&#128203; 复制全文';},2000);
+  });
+}
+
+function renderMarkdown(t) {
+  if (!t) return "";
+  // Headings
+  t = t.replace(/^### (.+)$/gm, "<h4>$1</h4>");
+  t = t.replace(/^## (.+)$/gm, "<h3>$1</h3>");
+  t = t.replace(/^# (.+)$/gm, "<h2>$1</h2>");
+  // Bold
+  t = t.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // Tables (simple pipe-to-table)
+  t = t.replace(/^(\|.+\|)\n(\|[-| ]+\|)\n((?:\|.+\|\n?)+)/gm, function(m) {
+    var lines = m.trim().split("\n").filter(function(l) { return l.indexOf("---") === -1; });
+    var out = "<table>";
+    lines.forEach(function(r) {
+      out += "<tr>" + r.split("|").filter(function(c) { return c.trim(); }).map(function(c) { return "<td>" + c.trim() + "</td>"; }).join("") + "</tr>";
+    });
+    out += "</table>";
+    return out;
+  });
+  // Horizontal rules
+  t = t.replace(/^---+$/gm, "<hr>");
+  // Bullet lists
+  t = t.replace(/^- (.+)$/gm, "<li>$1</li>");
+  t = t.replace(/((?:<li>.*<\/li>\n?)+)/g, function(m) { return "<ul>" + m + "</ul>"; });
+  // Paragraphs
+  t = t.replace(/\n\n/g, "</p><p>");
+  t = t.replace(/\n/g, "<br>");
+  return "<p>" + t + "</p>";
+}
+function esc(s){if(!s)return '';var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+</script>
+</body>
+</html>

@@ -1,0 +1,212 @@
+﻿# ============================================================
+# 吉康环境公众号推文自动生成系统 — 主配置文件
+# ============================================================
+# 使用方法: 通过Agent对话触发 /jikang-marketing，或手动运行各脚本
+# ============================================================
+
+# ── 知识库配置 ──────────────────────────────────────────────
+knowledge_base:
+  # 知识库根目录路径（已接入吉康知识库）
+  path: "G:/吉康知识库/"
+
+  # 后端类型: auto（自动检测）, file（文件系统）, json（JSON索引）
+  backend: auto
+
+  # JSON索引文件（使用json后端时生效）
+  index_file: null
+
+  # 文件编码
+  encoding: "utf-8"
+
+  # 单个文件最大大小（MB），超过此大小跳过
+  max_file_size_mb: 10
+
+# ── 输出配置 ──────────────────────────────────────────────
+output:
+  # 推文输出目录
+  dir: "./output/"
+
+  # 规划文件输出目录（中间产物）
+  plan_dir: "./plans/"
+
+  # 输出格式: prompt（生成提示词供Agent使用）| article（带标记的框架）
+  format: prompt
+
+  # 是否自动创建输出目录
+  auto_create_dirs: true
+
+# ── 品牌配置 ──────────────────────────────────────────────
+brand:
+  company_name: "广东吉康环境系统科技有限公司"
+  short_name: "吉康环境"
+  slogan: "让每一吨湿物料，低成本干燥，高价值利用"
+  website: "https://www.gdjikang.com/"
+  contact_email: "gdjk_2018@189.cn"
+  contact_phone: "400-8080-920"
+  address: "广东省佛山市南海区丹灶镇迎金二路1号"
+
+  # 文末固定文案（留空则使用默认模板）
+  footer_template: ""
+
+# ── 内容日历 ──────────────────────────────────────────────
+content_calendar:
+  # 内容日历文件路径
+  path: "./assets/content_calendar.yaml"
+
+  # 提前多少天提醒即将到期的任务
+  look_ahead_days: 7
+
+  # 是否自动执行今日到期的高优先级任务
+  auto_execute_high_priority: true
+
+# ── 核心信息源网站配置 ────────────────────────────────────
+# 信息采集优先从以下网站获取内容
+websites:
+  # 公司官网
+  gdjikang:
+    name: "吉康官网"
+    url: "https://www.gdjikang.com/"
+    category: ["事件", "技术"]
+    description: "公司新闻、产品参数、应用案例"
+
+  # 行业协会
+  gdepi:
+    name: "广东省环境保护产业协会"
+    url: "http://www.gdepi.com/"
+    category: ["事件", "政策", "技术"]
+    description: "广东环保产业动态、地方政策、行业活动"
+
+  caepi:
+    name: "中国环保产业协会"
+    url: "http://www.caepi.org.cn/"
+    category: ["事件", "政策", "技术"]
+    description: "全国环保产业资讯、行业标准、展会信息"
+
+  chpa:
+    name: "中国节能协会热泵专业委员会"
+    url: "https://www.chpa.org.cn/"
+    category: ["技术"]
+    description: "热泵技术前沿、行业标准、技术白皮书"
+
+  # 政府部门
+  miit:
+    name: "工业和信息化部"
+    url: "https://www.miit.gov.cn/"
+    category: ["政策"]
+    description: "产业政策、制造业规划、节能环保装备政策"
+
+  mee:
+    name: "生态环境部"
+    url: "https://www.mee.gov.cn/"
+    category: ["政策"]
+    description: "环保法规、排放标准、污染防治政策"
+
+  nea:
+    name: "国家能源局"
+    url: "https://www.nea.gov.cn/"
+    category: ["政策"]
+    description: "能源政策、节能规划、新能源与余热利用政策"
+
+# ── 搜索配置 ──────────────────────────────────────────────
+search:
+  # 最大搜索任务数
+  max_tasks: 10
+
+  # 高优先级任务数量上限
+  max_high_priority: 5
+
+  # 是否启用补充搜索（针对大纲各章节）
+  enable_supplementary: true
+
+  # 搜索结果缓存目录
+  cache_dir: "./cache/"
+
+  # 缓存有效期（秒），默认24小时
+  cache_ttl: 86400
+
+# ── 文章生成配置 ──────────────────────────────────────────
+generation:
+  # 默认内容类型（当无法自动识别时）
+  default_type: "技术"
+
+  # 最小字数
+  min_words: 1000
+
+  # 最大字数
+  max_words: 3000
+
+  # 是否在文中自动插入"关于吉康"简介
+  include_company_intro: true
+
+  # 数据待核实标记
+  unverified_marker: "[待核实]"
+
+
+# ── 信息源抓取配置 ──────────────────────────────────────────
+# 修改抓取 URL 后无需重启，scraper 进程内自动热读
+scraping:
+  sources:
+    - name: "吉康官网"
+      urls:
+        - type: search
+          url: "https://www.gdjikang.com/?s={query}"
+        - type: news
+          url: "https://www.gdjikang.com/news"
+        - type: home
+          url: "https://www.gdjikang.com"
+    - name: "广东环保协会"
+      urls:
+        - type: search
+          url: "http://www.gdepi.com/?s={query}"
+        - type: news
+          url: "http://www.gdepi.com/index.php?c=article&a=list&catid=2"
+        - type: home
+          url: "http://www.gdepi.com"
+    - name: "热泵专委会"
+      urls:
+        - type: search
+          url: "https://www.chpa.org.cn/?s={query}"
+        - type: news
+          url: "https://www.chpa.org.cn/news"
+        - type: home
+          url: "https://www.chpa.org.cn"
+    - name: "工信部"
+      urls:
+        - type: search
+          url: "https://sousuo.www.gov.cn/s?q={query}+site:miit.gov.cn"
+        - type: search
+          url: "https://www.miit.gov.cn/search/index.html?searchword={query}"
+        - type: news
+          url: "https://www.miit.gov.cn/xwdt/index.html"
+        - type: home
+          url: "https://www.miit.gov.cn"
+    - name: "环保产业协会"
+      urls:
+        - type: search
+          url: "http://www.caepi.org.cn/?s={query}"
+        - type: search
+          url: "http://www.caepi.org.cn/search.jspx?q={query}"
+        - type: news
+          url: "http://www.caepi.org.cn/epaspc/web/news_list.asp"
+        - type: home
+          url: "http://www.caepi.org.cn"
+    - name: "生态环境部"
+      urls:
+        - type: search
+          url: "https://sousuo.mee.gov.cn/s?q={query}"
+        - type: search
+          url: "https://www.mee.gov.cn/searchnew/?searchword={query}"
+        - type: news
+          url: "https://www.mee.gov.cn/ywdt/"
+        - type: home
+          url: "https://www.mee.gov.cn"
+    - name: "国家能源局"
+      urls:
+        - type: search
+          url: "https://sousuo.nea.gov.cn/s?q={query}"
+        - type: search
+          url: "https://www.nea.gov.cn/search/index.html?q={query}"
+        - type: news
+          url: "https://www.nea.gov.cn/xwzx/index.htm"
+        - type: home
+          url: "https://www.nea.gov.cn"
