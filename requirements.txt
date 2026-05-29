@@ -1,0 +1,38 @@
+# ============================================================
+# AI Marketing Workflow - Requirements
+# Python 3.10+
+# ============================================================
+
+# ---- AI Agent Framework ----
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-community>=0.3.0
+
+# ---- LLM Provider SDKs ----
+openai>=1.50.0
+httpx>=0.27.0
+
+# ---- Web Server ----
+fastapi>=0.115.0
+uvicorn>=0.32.0
+python-multipart>=0.0.18
+
+# ---- Web Scraping ----
+requests>=2.32.0
+beautifulsoup4>=4.12.0
+playwright>=1.48.0
+lxml>=5.3.0
+
+# ---- Scheduling ----
+apscheduler>=3.10.0
+
+# ---- Data Processing ----
+numpy>=1.26.0
+scikit-learn>=1.5.0
+
+# ---- Utilities ----
+pydantic>=2.9.0
+python-dotenv>=1.0.0
+tenacity>=9.0.0
+tqdm>=4.66.0

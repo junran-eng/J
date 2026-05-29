@@ -53,18 +53,21 @@ class PlaceholderProvider(ImageProvider):
 
 
 # ---- 全局工厂 ----
+import threading as _threading
 _provider_cache = None
+_provider_lock = _threading.Lock()
 
 
 def get_provider(api_key, force=None):
     """获取图片 provider，优先 DALL-E，无 key 则占位"""
     global _provider_cache
-    if _provider_cache is not None and force is None:
+    with _provider_lock:
+        if _provider_cache is not None and force is None:
+            return _provider_cache
+
+        if force == "dalle" or (api_key and api_key.startswith("sk-")):
+            _provider_cache = DalleProvider(api_key)
+        else:
+            _provider_cache = PlaceholderProvider()
+
         return _provider_cache
-
-    if force == "dalle" or (api_key and api_key.startswith("sk-")):
-        _provider_cache = DalleProvider(api_key)
-    else:
-        _provider_cache = PlaceholderProvider()
-
-    return _provider_cache

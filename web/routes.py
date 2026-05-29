@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # web/routes.py - FastAPI 路由（审核 + 效果 + 过滤 + 热重载）
 # ============================================================
 import json, logging, os, threading, uuid
@@ -103,12 +103,18 @@ def create_app() -> FastAPI:
         import yaml, os
         cal_path = os.path.join(DIR, "jikang-marketing-skill", "assets", "content_calendar.yaml")
         if not os.path.exists(cal_path):
-            return {"items": []}
+            return {"items": [], "stats": {}}
         with open(cal_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or []
         from datetime import datetime, timedelta
         today = datetime.now().strftime("%Y-%m-%d")
         cutoff = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+        all_future = [i for i in data if i.get("date","") >= today]
+        all_done = [i for i in data if i.get("done")]
+        # 本月
+        this_month = today[:7]
+        month_total = [i for i in data if i.get("date","")[:7] == this_month]
+        month_done = [i for i in month_total if i.get("done")]
         items = []
         for item in data:
             d = item.get("date", "")
@@ -117,10 +123,21 @@ def create_app() -> FastAPI:
                     "date": d, "topic": item.get("topic",""),
                     "type": item.get("type",""), "keywords": item.get("keywords",[]),
                     "priority": item.get("priority","normal"),
+                    "series": item.get("series", ""),
                     "done": item.get("done", False),
                 })
         items.sort(key=lambda x: x["date"])
-        return {"items": items}
+        return {
+            "items": items,
+            "stats": {
+                "total_future": len(all_future),
+                "total_done": len(all_done),
+                "completion_rate": round(len(all_done) / max(len(all_future) + len(all_done), 1) * 100, 1),
+                "month_total": len(month_total),
+                "month_done": len(month_done),
+                "month_rate": round(len(month_done) / max(len(month_total), 1) * 100, 1),
+            }
+        }
 
     # 日历 CRUD 辅助
     def _cal_path():
@@ -142,11 +159,14 @@ def create_app() -> FastAPI:
     @app.post("/api/calendar")
     async def cal_add(date: str = Form(...), topic: str = Form(...),
                       type: str = Form("tech"), priority: str = Form("normal"),
-                      keywords: str = Form("")):
+                      keywords: str = Form(""), series: str = Form("")):
         kw = [k.strip() for k in keywords.split(",") if k.strip()]
+        entry = {"date": date, "topic": topic, "type": type,
+                 "keywords": kw, "priority": priority, "done": False}
+        if series:
+            entry["series"] = series
         data = _cal_read()
-        data.append({"date": date, "topic": topic, "type": type,
-                     "keywords": kw, "priority": priority, "done": False})
+        data.append(entry)
         _cal_write(data)
         return {"ok": True}
 
@@ -182,8 +202,8 @@ def create_app() -> FastAPI:
         return {"pending": get_pending_reviews()}
 
     @app.post("/api/review/approve")
-    async def review_approve(session_id: str = Form(...)):
-        ok = approve_result(session_id)
+    async def review_approve(session_id: str = Form(...), operator: str = Form("reviewer")):
+        ok = approve_result(session_id, operator)
         return {"ok": ok}
 
     @app.post("/api/review/regen")
@@ -206,18 +226,48 @@ def create_app() -> FastAPI:
         from pipeline import run_pipeline
         import threading, uuid
         tid = uuid.uuid4().hex[:12]
+        stop_ev = threading.Event()
+        with web_lock:
+            web_tasks[tid] = {"id": tid, "topic": topic, "status": "pending", "stage": "重新生成中", "log": "", "created": datetime.now().isoformat(), "_stop_event": stop_ev}
         def job():
             try:
-                run_pipeline(topic, kw, cfg.model_name or 'deepseek-v4-flash', api_key, api_base, output_dir)
+                r = run_pipeline(topic, kw, cfg.model_name or 'deepseek-v4-flash', api_key, api_base, output_dir, stop_event=stop_ev, acquire_timeout=60)
+                with web_lock:
+                    if tid in web_tasks:
+                        web_tasks[tid].update({"status": "done", "result": r})
+            except InterruptedError:
+                with web_lock:
+                    if tid in web_tasks:
+                        web_tasks[tid].update({"status": "stopped", "stage": "stopped by user"})
             except Exception as e:
                 logger.error("[Regen] fail: %s", e)
+                with web_lock:
+                    if tid in web_tasks:
+                        web_tasks[tid].update({"status": "error", "error": str(e)})
         threading.Thread(target=job, daemon=True).start()
         return {"ok": True, "task_id": tid}
 
     @app.post("/api/review/reject")
-    async def review_reject(session_id: str = Form(...), reason: str = Form("")):
-        ok = reject_result(session_id, reason)
+    async def review_reject(session_id: str = Form(...), reason: str = Form(""), operator: str = Form("reviewer")):
+        ok = reject_result(session_id, reason, operator)
         return {"ok": ok}
+
+    @app.post("/api/review/comment")
+    async def review_comment(session_id: str = Form(...), comment: str = Form(...),
+                             author: str = Form("reviewer"), stage: str = Form("review")):
+        from infra.memory import add_review_comment
+        ok = add_review_comment(session_id, comment, author, stage)
+        return {"ok": ok}
+
+    @app.get("/api/review/comments/{session_id}")
+    async def review_comments(session_id: str):
+        from infra.memory import get_review_comments
+        return {"comments": get_review_comments(session_id)}
+
+    @app.get("/api/review/audit/{session_id}")
+    async def review_audit_log(session_id: str):
+        from infra.memory import get_audit_log
+        return {"log": get_audit_log(session_id)}
 
     @app.get("/api/review/rejected")
     async def review_rejected():
@@ -237,11 +287,144 @@ def create_app() -> FastAPI:
     async def perf_get(sid: str):
         return get_performance(sid)
 
+    @app.post("/api/performance/style")
+    async def perf_set_style(session_id: str = Form(...), style: str = Form(...)):
+        from infra.memory import set_published_style
+        ok = set_published_style(session_id, style)
+        return {"ok": ok}
+
     @app.get("/api/performance/stats")
     async def perf_stats():
-        return {"by_type": get_performance_stats()}
+        return get_performance_stats()
 
     # ============================================================
+    # 质量趋势
+    # ============================================================
+    @app.get("/api/stats/coverage")
+    async def stats_coverage(days: int = 60):
+        """内容覆盖率分析：已覆盖话题 vs 选题缺口"""
+        import sqlite3, yaml
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory", "conversations.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            # 已生成内容的主题分类
+            generated = conn.execute("""
+                SELECT content_type, COUNT(*) as cnt, GROUP_CONCAT(topic, '||') as topics
+                FROM stats WHERE status='approved'
+                  AND created_at >= date('now', ? || ' days')
+                GROUP BY content_type
+            """, (f"-{days}",)).fetchall()
+            # 所有生成过的主题关键词
+            all_topics_rows = conn.execute("""
+                SELECT DISTINCT topic FROM stats WHERE status='approved'
+                  AND created_at >= date('now', ? || ' days')
+                ORDER BY created_at DESC
+            """, (f"-{days}",)).fetchall()
+            all_topics = [r["topic"] for r in all_topics_rows]
+            # 日历待排期选题
+            cal_path = os.path.join(DIR, "jikang-marketing-skill", "assets", "content_calendar.yaml")
+            calendar_items = []
+            if os.path.exists(cal_path):
+                with open(cal_path, "r", encoding="utf-8") as f:
+                    cal_data = yaml.safe_load(f) or []
+                today = datetime.now().strftime("%Y-%m-%d")
+                for item in cal_data:
+                    d = item.get("date", "")
+                    if d >= today and not item.get("done"):
+                        calendar_items.append({
+                            "date": d, "topic": item.get("topic", ""),
+                            "type": item.get("type", ""), "priority": item.get("priority", "normal"),
+                        })
+            # 类型覆盖
+            type_coverage = {}
+            for r in generated:
+                type_coverage[r["content_type"]] = {"count": r["cnt"], "sample_topics": (r["topics"] or "").split("||")[:5]}
+            # 选题缺口：日历中未生成的类型统计
+            cal_types = {}
+            for ci in calendar_items:
+                t = ci.get("type", "unknown")
+                cal_types[t] = cal_types.get(t, 0) + 1
+            gaps = []
+            for ct, cal_cnt in cal_types.items():
+                gen_cnt = type_coverage.get(ct, {}).get("count", 0)
+                if cal_cnt > gen_cnt:
+                    gaps.append({"type": ct, "in_calendar": cal_cnt, "generated": gen_cnt, "gap": cal_cnt - gen_cnt})
+            return {
+                "type_coverage": type_coverage,
+                "total_generated": len(all_topics),
+                "calendar_pending": len(calendar_items),
+                "gaps": gaps,
+                "calendar_items": calendar_items[:20],
+            }
+        except Exception as e:
+            logger.warning("[coverage] %s", e)
+            return {"type_coverage": {}, "total_generated": 0, "calendar_pending": 0, "gaps": [], "calendar_items": []}
+        finally:
+            conn.close()
+
+    @app.get("/api/stats/trends")
+    async def stats_trends(days: int = 60):
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory", "conversations.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            # 每日评分均值 + 数量
+            daily = conn.execute("""
+                SELECT date(created_at) as day,
+                       ROUND(AVG(score), 1) as avg_score,
+                       COUNT(*) as cnt,
+                       SUM(tokens) as tokens
+                FROM stats WHERE status='approved'
+                  AND created_at >= date('now', ? || ' days')
+                GROUP BY day ORDER BY day
+            """, (f"-{days}",)).fetchall()
+            # 按内容类型的评分趋势
+            by_type = conn.execute("""
+                SELECT content_type,
+                       ROUND(AVG(score), 1) as avg_score,
+                       COUNT(*) as cnt,
+                       MAX(score) as best,
+                       MIN(score) as worst
+                FROM stats WHERE status='approved'
+                  AND created_at >= date('now', ? || ' days')
+                GROUP BY content_type
+            """, (f"-{days}",)).fetchall()
+            # 覆盖率：有内容的日期数 / 总工作日
+            coverage = conn.execute("""
+                SELECT COUNT(DISTINCT date(created_at)) as active_days,
+                       (SELECT COUNT(*) FROM stats WHERE status='approved'
+                        AND created_at >= date('now', ? || ' days')) as total
+                FROM stats WHERE status='approved'
+                  AND created_at >= date('now', ? || ' days')
+            """, (f"-{days}", f"-{days}")).fetchone()
+            # 评分分布
+            distribution = conn.execute("""
+                SELECT CASE
+                    WHEN score >= 90 THEN '90-100'
+                    WHEN score >= 80 THEN '80-89'
+                    WHEN score >= 70 THEN '70-79'
+                    ELSE '<70'
+                END as bucket, COUNT(*) as cnt
+                FROM stats WHERE status='approved'
+                  AND created_at >= date('now', ? || ' days')
+                GROUP BY bucket ORDER BY bucket
+            """, (f"-{days}",)).fetchall()
+            return {
+                "daily": [dict(r) for r in daily],
+                "by_type": [dict(r) for r in by_type],
+                "coverage": {
+                    "active_days": coverage["active_days"] if coverage else 0,
+                    "total_articles": coverage["total"] if coverage else 0,
+                },
+                "distribution": [dict(r) for r in distribution],
+            }
+        except Exception as e:
+            logger.warning("[trends] %s", e)
+            return {"daily": [], "by_type": [], "coverage": {}, "distribution": []}
+        finally:
+            conn.close()
     # 会话（支持过滤）
     # ============================================================
     @app.get("/api/sessions")
@@ -260,16 +443,45 @@ def create_app() -> FastAPI:
     # ============================================================
     # 生成
     # ============================================================
+
+    @app.get("/api/export")
+    async def export_approved(format: str = "txt"):
+        import sqlite3
+        import os as _os
+        db_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "memory", "conversations.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT s.title, m.body FROM sessions s JOIN messages m ON s.id=m.session_id AND m.role='agent' JOIN stats st ON s.title=st.topic AND s.created_at=st.created_at WHERE st.status='approved' ORDER BY s.created_at DESC LIMIT 100").fetchall()
+        conn.close()
+        if format == "txt":
+            nl = chr(10)
+            output = ""
+            for r in rows:
+                output += "=" * 60 + nl + (r["title"] or "") + nl + "=" * 60 + nl + nl
+                output += (r["body"] or "") + nl + nl + nl
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(output)
+        items = [{"title": r["title"], "body": r["body"][:500]} for r in rows]
+        return {"count": len(items), "items": items}
+
     def _run_web_job(tid, topic, kw, model, ak, ab, od, fast):
+        import threading
+        stop_ev = threading.Event()
+        with web_lock:
+            if tid in web_tasks:
+                web_tasks[tid]["_stop_event"] = stop_ev
         def p(msg):
             with web_lock:
                 if tid in web_tasks:
                     web_tasks[tid]["stage"] = msg
-                    web_tasks[tid]["log"] = web_tasks[tid].get("log", "") + msg + "\n"
+                    web_tasks[tid]["log"] = web_tasks[tid].get("log", "") + msg + chr(10)
         try:
-            r = run_pipeline(topic, kw, model, ak, ab, od, on_progress=p, fast=fast)
+            r = run_pipeline(topic, kw, model, ak, ab, od, on_progress=p, fast=fast, stop_event=stop_ev, acquire_timeout=60)
             with web_lock:
                 web_tasks[tid].update({"status": "done", "result": r})
+        except InterruptedError:
+            with web_lock:
+                web_tasks[tid].update({"status": "stopped", "stage": "stopped by user"})
         except Exception as e:
             with web_lock:
                 web_tasks[tid].update({"status": "error", "error": str(e)})
@@ -321,7 +533,7 @@ def create_app() -> FastAPI:
             else:
                 # 自定义反馈文本：追加到关键词作为生成方向
                 kw = [feedback] + kw
-        r = run_pipeline(topic, kw, model, api_key, api_base, output_dir, fast=(fast == "1"))
+        import threading as _th; _sev = _th.Event(); r = run_pipeline(topic, kw, model, api_key, api_base, output_dir, fast=(fast == "1"), stop_event=_sev)
         from agents.classifier import detect_content_type
         ct = detect_content_type(topic, kw)
         return {
@@ -330,8 +542,15 @@ def create_app() -> FastAPI:
             "scrape": r.get("scrape_status", ""),
             "elapsed": r["elapsed_seconds"],
             "rag": "", "content_type": ct,
+            "image_url": r.get("image_url", ""),
+            "versions": r.get("versions", []),
+            "meta_description": r.get("meta_description", ""),
+            "seo_keywords": r.get("seo_keywords", []),
+            "seo_titles": r.get("seo_titles", []),
+            "social_summary": r.get("social_summary", ""),
+            "email_version": r.get("email_version", ""),
         }
-
+    
     @app.post("/api/chat/stream")
     async def chat_stream(topic: str = Form(...), keywords: str = Form(""), model: str = Form("deepseek-v4-flash"),
                           fast: str = Form("0"), feedback: str = Form("")):
@@ -344,14 +563,45 @@ def create_app() -> FastAPI:
             else:
                 kw = [feedback] + kw
         is_fast = fast == "1"
+        import threading
+        tid = uuid.uuid4().hex[:12]
+        stop_ev = threading.Event()
+        with web_lock:
+            web_tasks[tid] = {"id": tid, "status": "pending", "stage": "已提交", "_stop_event": stop_ev}
+        import time as _time
         def gen():
             chunks = []
+            pipeline_done = threading.Event()
             def cb(msg):
                 chunks.append(msg)
-            r = run_pipeline(topic, kw, model, api_key, api_base, output_dir, on_progress=cb, fast=is_fast)
-            for c in chunks:
-                yield f"data: {json.dumps({'stage': c})}\n\n"
-            yield f"data: {json.dumps({'done': True, 'title': r['final_title'], 'body': r['final_body'], 'score': r['evaluation']['overall_score'], 'scrape': r.get('scrape_status', ''), 'elapsed': r['elapsed_seconds'], 'content_type': r.get('content_type', '')})}\n\n"
+            # Heartbeat: send keepalive every 10s to prevent connection timeout
+            def heartbeat():
+                while not pipeline_done.is_set():
+                    pipeline_done.wait(10)
+                    if not pipeline_done.is_set():
+                        chunks.append(None)  # marker for heartbeat
+            hb_thread = threading.Thread(target=heartbeat, daemon=True)
+            hb_thread.start()
+            try:
+                r = run_pipeline(topic, kw, model, api_key, api_base, output_dir, on_progress=cb, fast=is_fast, stop_event=stop_ev, acquire_timeout=60)
+            finally:
+                pipeline_done.set()
+            try:
+                for c in chunks:
+                    if c is None:
+                        yield "data: " + json.dumps({"heartbeat": True}, ensure_ascii=False) + "\n\n"
+                    else:
+                        yield "data: " + json.dumps({"stage": c}, ensure_ascii=False) + "\n\n"
+                if r.get("stopped"):
+                    yield "data: " + json.dumps({"stopped": True, "stage": "已取消"}, ensure_ascii=False) + "\n\n"
+                else:
+                    yield "data: " + json.dumps({"done": True, "title": r["final_title"], "body": r["final_body"], "score": r["evaluation"]["overall_score"], "scrape": r.get("scrape_status", ""), "elapsed": r["elapsed_seconds"], "content_type": r.get("content_type", ""), "image_url": r.get("image_url", ""), "versions": r.get("versions", []), "meta_description": r.get("meta_description",""), "seo_keywords": r.get("seo_keywords",[]), "seo_titles": r.get("seo_titles",[]), "social_summary": r.get("social_summary",""), "email_version": r.get("email_version","")}, ensure_ascii=False) + "\n\n"
+            except InterruptedError:
+                yield "data: " + json.dumps({"stopped": True, "stage": "已取消"}, ensure_ascii=False) + "\n\n"
+            finally:
+                with web_lock:
+                    if tid in web_tasks:
+                        web_tasks[tid]["status"] = "done"
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.post("/api/stop")
@@ -453,7 +703,6 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.warning("[Sched] 恢复失败: %s", e)
 
-    return app
     @app.get("/api/review/{session_id}/body")
     async def review_body(session_id: str):
         msgs = get_messages(session_id)
@@ -461,5 +710,121 @@ def create_app() -> FastAPI:
         if not agent_msg:
             return JSONResponse({"error": "not found"}, 404)
         return {"body": agent_msg.get("body", ""), "title": agent_msg.get("content", "")}
+
+    # ============================================================
+    # 知识库管理
+    # ============================================================
+    def _kb_dir():
+        return os.path.join(DIR, "knowledge_base")
+
+    @app.get("/api/knowledge")
+    async def kb_list():
+        """列出知识库文件，按目录分组"""
+        import os as _os
+        base = _kb_dir()
+        if not _os.path.isdir(base):
+            return {"categories": [], "files": []}
+        categories = []
+        files = []
+        for root, dirs, fnames in _os.walk(base):
+            rel = _os.path.relpath(root, base)
+            if rel == ".":
+                rel = ""
+            for d in dirs:
+                cat_path = _os.path.join(rel, d) if rel else d
+                # count files in this category
+                cat_files = [f for f in _os.listdir(_os.path.join(root, d)) if f.endswith(".md")]
+                if cat_files:
+                    categories.append({"name": cat_path, "file_count": len(cat_files)})
+            for fn in fnames:
+                if fn.endswith(".md"):
+                    full = _os.path.join(root, fn)
+                    try:
+                        stat = _os.stat(full)
+                        with open(full, "r", encoding="utf-8") as f:
+                            first_line = f.readline().strip().lstrip("#").strip()
+                    except Exception:
+                        first_line = fn
+                        stat = type('obj', (object,), {'st_size': 0, 'st_mtime': 0})()
+                    files.append({
+                        "category": rel,
+                        "filename": fn,
+                        "path": _os.path.join(rel, fn) if rel else fn,
+                        "title": first_line[:60] or fn,
+                        "size": stat.st_size,
+                        "updated": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    })
+        # Sort by category then filename
+        files.sort(key=lambda x: (x["category"], x["filename"]))
+        # Deduplicate categories
+        seen = set()
+        unique_cats = []
+        for c in categories:
+            if c["name"] not in seen:
+                seen.add(c["name"])
+                unique_cats.append(c)
+        return {"categories": unique_cats, "files": files}
+
+    @app.get("/api/knowledge/{path:path}")
+    async def kb_read(path: str):
+        full = os.path.join(_kb_dir(), path)
+        full = os.path.normpath(full)
+        if not full.startswith(os.path.normpath(_kb_dir())):
+            return JSONResponse({"error": "路径非法"}, 403)
+        if not os.path.isfile(full):
+            return JSONResponse({"error": "文件不存在"}, 404)
+        try:
+            with open(full, "r", encoding="utf-8") as f:
+                content = f.read()
+            return {"path": path, "content": content, "size": len(content)}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.post("/api/knowledge")
+    async def kb_save(path: str = Form(...), content: str = Form(...)):
+        full = os.path.join(_kb_dir(), path)
+        full = os.path.normpath(full)
+        if not full.startswith(os.path.normpath(_kb_dir())):
+            return JSONResponse({"error": "路径非法"}, 403)
+        if not full.endswith(".md"):
+            return JSONResponse({"error": "仅支持 .md 文件"}, 400)
+        try:
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(content)
+            kb_reload()
+            logger.info("[KB] saved %s (%d chars)", path, len(content))
+            return {"ok": True, "path": path}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    @app.delete("/api/knowledge")
+    async def kb_delete(path: str = Form(...)):
+        full = os.path.join(_kb_dir(), path)
+        full = os.path.normpath(full)
+        if not full.startswith(os.path.normpath(_kb_dir())):
+            return JSONResponse({"error": "路径非法"}, 403)
+        if not os.path.isfile(full):
+            return JSONResponse({"error": "文件不存在"}, 404)
+        try:
+            os.remove(full)
+            # Remove empty parent dirs
+            parent = os.path.dirname(full)
+            while parent != _kb_dir():
+                try:
+                    if not os.listdir(parent):
+                        os.rmdir(parent)
+                        parent = os.path.dirname(parent)
+                    else:
+                        break
+                except Exception:
+                    break
+            kb_reload()
+            logger.info("[KB] deleted %s", path)
+            return {"ok": True}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 500)
+
+    return app
 
 

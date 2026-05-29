@@ -48,6 +48,7 @@ def generate_variants(topic, content_type_label, research_reports, kb_text, call
             t = art2.get("title", t)
             b = art2.get("body", b)
             imp = art2.get("image_prompt", imp)
+            art = art2  # 用重试结果提取 SEO 字段
 
         versions.append({
             "style": sname,
@@ -55,7 +56,16 @@ def generate_variants(topic, content_type_label, research_reports, kb_text, call
             "body": clean_text(b),
             "image_prompt": imp.strip() if imp else "",
             "score": 0,
+            # SEO + 多形态输出
+            "meta_description": clean_text(art.get("meta_description", "")),
+            "seo_keywords": art.get("seo_keywords", []) if isinstance(art.get("seo_keywords"), list) else [],
+            "seo_titles": art.get("seo_titles", []) if isinstance(art.get("seo_titles"), list) else [],
+            "social_summary": clean_text(art.get("social_summary", "")),
+            "email_version": clean_text(art.get("email_version", "")),
         })
-        logger.info("[Editor] %s: %d chars", sname, len(b))
+        logger.info("[Editor] %s: %d chars, seo_kw=%d, seo_titles=%d",
+                    sname, len(b),
+                    len(versions[-1]["seo_keywords"]),
+                    len(versions[-1]["seo_titles"]))
 
     return versions

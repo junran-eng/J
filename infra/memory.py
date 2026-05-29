@@ -42,6 +42,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 topic TEXT, score INTEGER, elapsed REAL, tokens INTEGER,
                 content_type TEXT, status TEXT DEFAULT 'pending_review',
+                published_style TEXT DEFAULT '',
                 created_at TEXT
             );
             CREATE TABLE IF NOT EXISTS schedules (
@@ -53,6 +54,24 @@ def init_db():
                 session_id TEXT UNIQUE, reads INTEGER DEFAULT 0,
                 shares INTEGER DEFAULT 0, likes INTEGER DEFAULT 0,
                 recorded_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS review_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                author TEXT DEFAULT 'reviewer',
+                comment TEXT NOT NULL,
+                stage TEXT DEFAULT 'review',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS review_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                from_status TEXT DEFAULT '',
+                to_status TEXT NOT NULL,
+                operator TEXT DEFAULT 'system',
+                note TEXT DEFAULT '',
+                created_at TEXT NOT NULL
             );
         """)
         conn.commit()
@@ -71,15 +90,25 @@ def _run_migrations(conn):
         except sqlite3.OperationalError: pass
     try: conn.execute("UPDATE stats SET status='approved' WHERE status IS NULL OR status=''")
     except sqlite3.OperationalError: pass
+    try: conn.execute("ALTER TABLE stats ADD COLUMN published_style TEXT DEFAULT ''")
+    except sqlite3.OperationalError: pass
     for idx_sql in [
         "CREATE INDEX IF NOT EXISTS idx_stats_status ON stats(status)",
         "CREATE INDEX IF NOT EXISTS idx_stats_type ON stats(content_type)",
         "CREATE INDEX IF NOT EXISTS idx_stats_date ON stats(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_stats_style ON stats(published_style)",
     ]:
         try: conn.execute(idx_sql)
         except sqlite3.OperationalError: pass
     conn.commit()
 
+
+def _estimate_tokens(text):
+    """Rough token count: CJK chars ~1.5 tokens, others ~0.3 tokens"""
+    import re
+    cjk = len(re.findall(r'[一-鿿㐀-䶿]', text))
+    other = len(text) - cjk
+    return int(cjk * 1.5 + other * 0.3)
 
 def save_result(topic, content_type, result, output_dir):
     """Save generation result, default status=pending_review"""
@@ -102,7 +131,7 @@ def save_result(topic, content_type, result, output_dir):
         )
         conn.execute(
             "INSERT INTO stats(topic,score,elapsed,tokens,content_type,status,created_at) VALUES(?,?,?,?,?,?,?)",
-            (topic[:80], score, result["elapsed_seconds"], len(final_body) // 3, content_type, "pending_review", now)
+            (topic[:80], score, result["elapsed_seconds"], _estimate_tokens(final_body), content_type, "pending_review", now)
         )
         conn.commit()
         wal_checkpoint(_get_db_path())
@@ -116,16 +145,54 @@ def save_result(topic, content_type, result, output_dir):
 # ============================================================
 # Review
 # ============================================================
-def approve_result(session_id):
-    return _set_status(session_id, "approved")
-
-
-def reject_result(session_id, reason=""):
+def _audit_log(session_id, action, from_status, to_status, operator="system", note=""):
+    """记录审核操作日志"""
     conn = get_connection()
     try:
-        conn.execute("UPDATE stats SET status='rejected', reason=? WHERE topic=(SELECT title FROM sessions WHERE id=?)", (reason, session_id))
+        conn.execute(
+            "INSERT INTO review_audit_log(session_id,action,from_status,to_status,operator,note,created_at) VALUES(?,?,?,?,?,?,?)",
+            (session_id, action, from_status, to_status, operator, note, datetime.now().isoformat()))
+        conn.commit()
+    except Exception as e:
+        logger.debug("[MEM] audit log failed: %s", e)
+    finally:
+        conn.close()
+
+
+def _get_current_status(session_id):
+    """Get current status for a session"""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT st.status FROM stats st "
+            "WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.title=st.topic AND s.created_at=st.created_at AND s.id=?)",
+            (session_id,)).fetchone()
+        return row["status"] if row else ""
+    except Exception:
+        return ""
+    finally:
+        conn.close()
+
+
+def approve_result(session_id, operator="reviewer"):
+    old = _get_current_status(session_id)
+    ok = _set_status(session_id, "approved")
+    if ok:
+        _audit_log(session_id, "approve", old, "approved", operator)
+    return ok
+
+
+def reject_result(session_id, reason="", operator="reviewer"):
+    old = _get_current_status(session_id)
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE stats SET status='rejected', reason=? "
+            "WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.title=stats.topic AND s.created_at=stats.created_at AND s.id=?)",
+            (reason, session_id))
         conn.commit()
         wal_checkpoint(_get_db_path())
+        _audit_log(session_id, "reject", old, "rejected", operator, reason)
         logger.info("[MEM] session=%s rejected reason=%s", session_id, reason[:40] if reason else "-")
         return True
     except Exception as e:
@@ -138,7 +205,10 @@ def reject_result(session_id, reason=""):
 def _set_status(session_id, status):
     conn = get_connection()
     try:
-        conn.execute("UPDATE stats SET status=? WHERE topic=(SELECT title FROM sessions WHERE id=?)", (status, session_id))
+        conn.execute(
+            "UPDATE stats SET status=? "
+            "WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.title=stats.topic AND s.created_at=stats.created_at AND s.id=?)",
+            (status, session_id))
         conn.commit()
         wal_checkpoint(_get_db_path())
         logger.info("[MEM] session=%s status=%s", session_id, status)
@@ -146,6 +216,52 @@ def _set_status(session_id, status):
     except Exception as e:
         logger.warning("[MEM] set_status failed: %s", e)
         return False
+    finally:
+        conn.close()
+
+
+# ---- Review comments ----
+def add_review_comment(session_id, comment, author="reviewer", stage="review"):
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO review_comments(session_id,author,comment,stage,created_at) VALUES(?,?,?,?,?)",
+            (session_id, author, comment, stage, datetime.now().isoformat()))
+        conn.commit()
+        wal_checkpoint(_get_db_path())
+        logger.info("[MEM] comment added to %s by %s", session_id, author)
+        return True
+    except Exception as e:
+        logger.warning("[MEM] add_comment failed: %s", e)
+        return False
+    finally:
+        conn.close()
+
+
+def get_review_comments(session_id):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT author, comment, stage, created_at FROM review_comments WHERE session_id=? ORDER BY id",
+            (session_id,)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("[MEM] get_comments failed: %s", e)
+        return []
+    finally:
+        conn.close()
+
+
+def get_audit_log(session_id):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT action, from_status, to_status, operator, note, created_at FROM review_audit_log WHERE session_id=? ORDER BY id",
+            (session_id,)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("[MEM] audit_log failed: %s", e)
+        return []
     finally:
         conn.close()
 
@@ -216,10 +332,30 @@ def get_performance(session_id):
         conn.close()
 
 
-def get_performance_stats():
+def set_published_style(session_id, style):
+    """记录实际发布时选用的版本风格（标准版/数据版/故事版）"""
     conn = get_connection()
     try:
-        rows = conn.execute("""
+        conn.execute(
+            "UPDATE stats SET published_style=? "
+            "WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.title=stats.topic AND s.created_at=stats.created_at AND s.id=?)",
+            (style, session_id))
+        conn.commit()
+        wal_checkpoint(_get_db_path())
+        logger.info("[MEM] session=%s published_style=%s", session_id, style)
+        return True
+    except Exception as e:
+        logger.warning("[MEM] set_published_style failed: %s", e)
+        return False
+    finally:
+        conn.close()
+
+
+def get_performance_stats():
+    """按内容类型 + 版本风格分组的效果统计"""
+    conn = get_connection()
+    try:
+        by_type = conn.execute("""
             SELECT st.content_type,
                    COUNT(p.session_id) as cnt,
                    AVG(p.reads) as avg_reads,
@@ -231,10 +367,24 @@ def get_performance_stats():
             JOIN stats st ON s.title = st.topic AND s.created_at = st.created_at
             GROUP BY st.content_type
         """).fetchall()
-        return [dict(r) for r in rows]
+        by_style = conn.execute("""
+            SELECT st.published_style,
+                   COUNT(p.session_id) as cnt,
+                   AVG(p.reads) as avg_reads,
+                   SUM(p.reads) as total_reads
+            FROM performance p
+            JOIN sessions s ON p.session_id = s.id
+            JOIN stats st ON s.title = st.topic AND s.created_at = st.created_at
+            WHERE st.published_style != ''
+            GROUP BY st.published_style
+        """).fetchall()
+        return {
+            "by_type": [dict(r) for r in by_type],
+            "by_style": [dict(r) for r in by_style],
+        }
     except Exception as e:
         logger.warning("[MEM] get_perf_stats failed: %s", e)
-        return []
+        return {"by_type": [], "by_style": []}
     finally:
         conn.close()
 

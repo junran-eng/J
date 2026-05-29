@@ -27,7 +27,21 @@ def _split_chunks(text, source):
         else:
             if current:
                 chunks.append({"text": current.strip(), "source": source})
-            current = para + "\n"
+            # 单段超长：按句子切分强制写入
+            if len(para) >= CHUNK_SIZE:
+                sentences = re.split(r'(?<=[。！？；\n])', para)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if not sent:
+                        continue
+                    if len(current) + len(sent) < CHUNK_SIZE:
+                        current += sent
+                    else:
+                        if current.strip():
+                            chunks.append({"text": current.strip(), "source": source})
+                        current = sent
+            else:
+                current = para + "\n"
 
     if current.strip():
         chunks.append({"text": current.strip(), "source": source})
@@ -35,33 +49,33 @@ def _split_chunks(text, source):
     return chunks
 
 
+def _tokenize(text):
+    """中文用字符 bigram + 单字，英文/数字用空格分词，混合场景两套都跑"""
+    tokens = []
+    # CJK character bigrams
+    cjk = re.findall(r'[一-鿿㐀-䶿]{2,}', text)
+    for seg in cjk:
+        for i in range(len(seg) - 1):
+            tokens.append(seg[i:i + 2])
+        tokens.append(seg[-1])  # 最后一个单字也加进去
+    # Space-delimited tokens (English, numbers, mixed)
+    non_cjk = re.sub(r'[一-鿿㐀-䶿]', ' ', text)
+    tokens.extend(t.lower() for t in non_cjk.split() if len(t) >= 2)
+    return set(tokens)
+
+
 def _score_chunk(chunk_text, query):
-    """简单 TF 评分"""
-    query_terms = set(query.lower().split())
+    """混合 TF 评分：中文 bigram + 空格分词"""
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return 0
     text_lower = chunk_text.lower()
-    score = sum(1 for t in query_terms if t in text_lower)
+    score = sum(1 for t in query_tokens if t in text_lower)
     # 标题行加权
     for line in chunk_text.splitlines():
-        if line.startswith("#") and any(t in line.lower() for t in query_terms):
+        if line.startswith("#") and any(t in line.lower() for t in query_tokens):
             score += 2
     return score
-
-# Embedding cache per request cycle
-_embed_cache: dict = {}
-
-
-def _score_chunk_embedding(chunk_text, query_embedding):
-    """Score chunk by cosine similarity with query embedding"""
-    if query_embedding is None:
-        return 0
-    # Simple TF-IDF on chunk + cosine approximation
-    chunk_lower = chunk_text.lower()
-    query_terms_lower = set()
-    # Since we don't have the raw query, approximate by checking common terms
-    # The embedding API call happens once in retrieve()
-    return 1.0  # Placeholder - actual scoring done via cosine in retrieve()
-
-
 
 def load_knowledge_base(kb_dir=None):
     """加载知识库，分块存储"""
@@ -95,8 +109,8 @@ def load_knowledge_base(kb_dir=None):
     logger.info("[KB] loaded %d chunks from knowledge_base", len(_kb_chunks))
 
 
-def retrieve(topic, keywords, top_k=8, max_chars=4000, use_embedding=True):
-    """Retrieve relevant KB chunks using hybrid TF + embedding scoring"""
+def retrieve(topic, keywords, api_key="", api_base="", top_k=8, max_chars=4000):
+    """关键词检索知识库片段（中文 bigram TF 评分）"""
     global _kb_chunks
 
     if not _kb_chunks:
@@ -104,35 +118,17 @@ def retrieve(topic, keywords, top_k=8, max_chars=4000, use_embedding=True):
 
     query = topic + " " + " ".join(keywords[:3])
 
-    # Hybrid scoring: TF (fast) + Embedding cosine similarity (semantic)
-    tf_scored = [(chunk, _score_chunk(chunk, query)) for chunk in _kb_chunks]
-    max_tf = max(s for _, s in tf_scored) if tf_scored else 1
-    tf_norm = {c["source"] + str(i): (c, s / max(max_tf, 1)) for i, (c, s) in enumerate(tf_scored)}
-
-    if use_embedding:
-        try:
-            from infra.llm import call_embedding
-            import os
-            api_key = os.getenv("OPENAI_API_KEY", os.getenv("DEEPSEEK_API_KEY", ""))
-            api_base = os.getenv("OPENAI_API_BASE", os.getenv("DEEPSEEK_API_BASE", "https://api.openai.com/v1"))
-            if api_key:
-                qv = call_embedding(query, api_key, api_base)
-                if qv is not None:
-                    import json
-                    # Approximate cosine similarity via dot product on normalized chunks
-                    logger.debug("[KB] embedding scored %d chunks", len(_kb_chunks))
-        except Exception as e:
-            logger.debug("[KB] embedding failed, using TF only: %s", e)
-            use_embedding = False
-    else:
-        qv = None
-
-    # Build combined scores
+    # TF 评分
     scored = []
+    max_tf = 1
     for chunk in _kb_chunks:
-        tf = _score_chunk(chunk, query) / max(max_tf, 1)
-        combined = tf
-        scored.append((chunk, combined))
+        s = _score_chunk(chunk["text"], query)
+        scored.append((chunk, s))
+        if s > max_tf:
+            max_tf = s
+
+    # 归一化并排序
+    scored = [(c, s / max(max_tf, 1)) for c, s in scored]
     scored.sort(key=lambda x: x[1], reverse=True)
 
     selected = [c for c, s in scored if s > 0][:top_k]
@@ -141,7 +137,6 @@ def retrieve(topic, keywords, top_k=8, max_chars=4000, use_embedding=True):
 
     logger.info("[KB] query='%s' -> %d/%d chunks selected", topic[:40], len(selected), len(_kb_chunks))
 
-    # 拼接，限制总长度
     result = ""
     for chunk in selected:
         if len(result) + len(chunk["text"]) > max_chars:

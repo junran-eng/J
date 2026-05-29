@@ -1,4 +1,4 @@
-﻿# ======================================================================
+# ======================================================================
 # main.py — AI 智能推广工作流 v5.0
 # ======================================================================
 import argparse, io, logging, logging.handlers, os, sys
@@ -25,11 +25,10 @@ if os.path.exists(env_path):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            line = line.replace(" ", "").replace("==", "=")
             if "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            v = v.strip().strip('"').strip("'")
+            k = k.strip(); v = v.strip().strip('"').strip("'")
             if k.isascii() and k.isupper():
                 os.environ.setdefault(k, v)
 
@@ -53,7 +52,7 @@ def load_calendar():
     if not os.path.exists(cal_path): return []
     try:
         with open(cal_path, "r", encoding="utf-8") as f: data = yaml.safe_load(f)
-    except: return []
+    except Exception: return []
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
     tasks = []
@@ -136,13 +135,13 @@ def main():
     if args.classify_llm:
         from agents.classifier import classify_with_llm
         from infra.llm import call_llm
-        def llm_fn(s, u): return call_llm(s, u, args.model, api_key, api_base)
+        def llm_fn(s, u): return call_llm(s, u, model, api_key, api_base)
         forced_ct = classify_with_llm(args.topic, kw, llm_fn)
         print(f"  [LLM分类] {forced_ct}", flush=True)
 
     if args.schedule:
         from scheduler.scheduler import run_schedule
-        run_schedule(args.topic, kw, args.model, cron=args.cron, interval=args.interval, at=args.at)
+        run_schedule(args.topic, kw, model, cron=args.cron, interval=args.interval, at=args.at)
     else:
         print(f"\n  单次: {args.topic} {'(快速)' if args.fast else ''}\n", flush=True)
         r = run_pipeline(args.topic, kw, args.model, api_key, api_base, args.output_dir, fast=args.fast, content_type=forced_ct)
@@ -151,11 +150,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
 
 
 

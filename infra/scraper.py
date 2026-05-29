@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # infra/scraper.py — 智能网页抓取（配置驱动 + 代码兜底）
 # ============================================================
 import logging, os, re, ssl, sys, urllib.request, urllib.error, urllib.parse
@@ -21,7 +21,7 @@ except ImportError:
 try:
     from playwright.sync_api import sync_playwright
     _has_playwright = True
-except (ImportError, Exception):
+except ImportError:
     _has_playwright = False
 
 _PLAYWRIGHT_TIMEOUT = int(os.getenv("SCRAPER_PLAYWRIGHT_TIMEOUT", "20"))
@@ -110,6 +110,7 @@ def _fetch_url(url, timeout=TIMEOUT):
             return resp.read()
     except (ssl.SSLError, ssl.SSLCertVerificationError) as e:
         logger.debug("[scrape] SSL error for %s, retrying with verify disabled: %s", url, str(e)[:80])
+        logger.warning("[scrape] SSL verify disabled for %s - MITM risk", url[:60])
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
@@ -153,7 +154,7 @@ def scrape_web(topic, keywords, timeout=TIMEOUT):
             url_type = entry.get("type", "unknown")
             try:
                 url = url_tpl.format(query=q)
-            except KeyError:
+            except (KeyError, IndexError, ValueError):
                 url = url_tpl
 
             try:

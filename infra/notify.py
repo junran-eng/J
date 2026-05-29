@@ -9,11 +9,14 @@ from datetime import datetime
 
 logger = logging.getLogger("infra.notify")
 
+import threading as _threading
+
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_TYPE = os.getenv("WEBHOOK_TYPE", "generic")  # wecom | feishu | generic
 
 # 最近通知记录（内存，重启清空）
 _notification_log = []  # [{time, title, status, error}]
+_notification_lock = _threading.Lock()
 MAX_LOG = 50
 
 
@@ -40,14 +43,15 @@ def send(title, body="", status="success"):
     """发送 webhook 通知"""
     global _notification_log
 
-    _notification_log.append({
-        "time": datetime.now().isoformat(),
-        "title": title[:100],
-        "status": status,
-        "error": "",
-    })
-    if len(_notification_log) > MAX_LOG:
-        _notification_log = _notification_log[-MAX_LOG:]
+    with _notification_lock:
+        _notification_log.append({
+            "time": datetime.now().isoformat(),
+            "title": title[:100],
+            "status": status,
+            "error": "",
+        })
+        if len(_notification_log) > MAX_LOG:
+            _notification_log = _notification_log[-MAX_LOG:]
 
     if not WEBHOOK_URL:
         logger.debug("[notify] WEBHOOK_URL 未配置，跳过通知")
@@ -65,14 +69,16 @@ def send(title, body="", status="success"):
             return True
     except Exception as e:
         logger.warning("[notify] 发送失败: %s", e)
-        if _notification_log:
-            _notification_log[-1]["error"] = str(e)[:100]
+        with _notification_lock:
+            if _notification_log:
+                _notification_log[-1]["error"] = str(e)[:100]
         return False
 
 
 def get_recent(limit=20):
     """获取最近通知记录"""
-    return _notification_log[-limit:]
+    with _notification_lock:
+        return list(_notification_log[-limit:])
 
 
 def notify_task_result(topic, score, elapsed, success=True):

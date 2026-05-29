@@ -48,6 +48,31 @@
     <div id="perfDashBody"></div>
   </div>
 
+  <div class="perf-dashboard" id="trendsPanel">
+    <div class="perf-dash-header" onclick="document.getElementById('trendsBody').classList.toggle('hide');if(!document.getElementById('trendsBody').classList.contains('hide'))loadTrends()">&#128202; 质量趋势</div>
+    <div id="trendsBody" class="hide"></div>
+  </div>
+
+  <div class="perf-dashboard" id="coveragePanel">
+    <div class="perf-dash-header" onclick="document.getElementById('coverageBody').classList.toggle('hide');if(!document.getElementById('coverageBody').classList.contains('hide'))loadCoverage()">&#127758; 内容覆盖率</div>
+    <div id="coverageBody" class="hide"></div>
+  </div>
+
+  <button class="btn-export" onclick="toggleKBManager()" style="margin-top:4px">&#128218; 知识库管理</button>
+  <div class="kb-manager hide" id="kbManager">
+    <div class="kb-header">知识库文件 <button class="kb-add-btn" onclick="kbAddFile()">+ 新建</button></div>
+    <div class="kb-search-row"><input id="kbSearchInput" placeholder="搜索文件名或标题..." oninput="loadKBList()"></div>
+    <div class="kb-list" id="kbList"></div>
+    <div class="kb-editor hide" id="kbEditor">
+      <input id="kbEditPath" placeholder="文件路径 (如 tech/选型指南.md)">
+      <textarea id="kbEditContent" placeholder="Markdown 内容..." rows="8"></textarea>
+      <div class="kb-editor-actions">
+        <button onclick="kbSave()">保存</button>
+        <button onclick="document.getElementById('kbEditor').classList.add('hide')">取消</button>
+      </div>
+    </div>
+  </div>
+
   <div class="review-panel" id="reviewPanel">
     <div class="review-header" onclick="toggleReview()">
       <span>&#128220; 待审核</span>
@@ -78,7 +103,7 @@
       </select>
       <button class="btn-sm primary" onclick="scheduleCron()">确认周期</button>
     </span>
-    <label class="toggle-row" title="跳过数据版和故事版">
+    <label class="toggle-row" title="标准模式生成3个版本（标准版+数据版+故事版），快速模式只生成1个标准版，省2/3时间">
       <input type="checkbox" id="fastMode" onchange="updateFastHint()"><span>&#9889; 快速</span>
     </label>
     <span class="filter-group" id="filterGroup">
@@ -90,10 +115,15 @@
       </select>
       <input type="date" id="filterDateFrom" onchange="loadSessions()" title="开始日期">
       <input type="date" id="filterDateTo" onchange="loadSessions()" title="结束日期">
-      <button class="filter-btn" onclick="loadSessions()">筛选</button>
+      <button class="filter-btn" onclick="_sessionPage=0;loadSessions(false)">筛选</button>
       <button class="filter-btn" onclick="resetFilters()">重置</button>
     </span>
     <button class="cal-btn" onclick="toggleCalendar()">&#128197; 日历</button>
+    <button class="cal-btn" onclick="toggleNotifications()" id="notifBtn" style="position:relative">&#128276; 通知<span class="notif-dot hide" id="notifDot"></span></button>
+    <div class="calendar-dropdown hide" id="notifDropdown">
+      <div class="notif-header">最近通知 <button class="notif-clear" onclick="clearNotifications()">清空</button></div>
+      <div class="notif-list" id="notifList"></div>
+    </div>
     <div class="jobs-bar" id="jobsBar"></div>
     <div class="calendar-dropdown hide" id="calendarDropdown"></div>
   </div>
@@ -134,6 +164,10 @@ var state = {
 };
 
 (function init() {
+  document.getElementById('filterType').addEventListener('change',function(){_sessionPage=0;loadSessions(false);});
+  document.getElementById('filterDateFrom').addEventListener('change',function(){_sessionPage=0;loadSessions(false);});
+  document.getElementById('filterDateTo').addEventListener('change',function(){_sessionPage=0;loadSessions(false);});
+  document.getElementById('searchInput').addEventListener('input',function(){_sessionPage=0;loadSessions(false);});
   buildTimeSelects();
   checkConfig();
   loadSessions(); loadJobs(); loadStats(); loadPendingReviews(); loadPerfDashboard();
@@ -208,7 +242,9 @@ function toast(msg, type) {
 // ============================================================
 // Sessions
 // ============================================================
-function loadSessions() {
+var _sessionPage = 0;
+function loadSessions(reset) {
+  if (reset) _sessionPage = 0;
   var type = document.getElementById('filterType').value;
   var from = document.getElementById('filterDateFrom').value;
   var to = document.getElementById('filterDateTo').value;
@@ -218,11 +254,15 @@ function loadSessions() {
   if (from) params.set('date_from', from);
   if (to) params.set('date_to', to);
   if (q) params.set('q', q);
+  params.set('limit', String(50 + _sessionPage * 50));
   var url = '/api/sessions' + (params.toString() ? '?' + params.toString() : '');
   fetch(url).then(function(r) { return r.json(); })
     .then(function(d) { state.sessions = d.sessions || []; renderSessions(state.sessions); });
 }
-
+function loadMoreSessions() {
+  _sessionPage++;
+  loadSessions();
+}
 function renderSessions(list) {
   var h = '';
   (list || []).forEach(function(s) {
@@ -299,7 +339,7 @@ function showReviewBody(sid, el) {
     fetch('/api/review/' + sid + '/body')
       .then(function(r) { return r.json(); })
       .then(function(d) {
-        preview.textContent = d.body || '(无内容)';
+        preview.innerHTML = renderMarkdown(d.body || '(无内容)');
         preview.classList.add('open');
       })
       .catch(function() { preview.textContent = '加载失败'; });
@@ -321,6 +361,8 @@ function loadPendingReviews() {
         +'<button class="r-btn approve" onclick="event.stopPropagation();approveOne(\''+item.id+'\')">&#10003; 通过</button>'
         +'<button class="r-btn reject" onclick="event.stopPropagation();openRejectDialog(\''+item.id+'\')">&#10007; 驳回</button>'
         +'<button class="r-btn regen" onclick="event.stopPropagation();regenOne(\''+item.id+'\')">&#8634; 重新生成</button>'
+        +'<button class="r-btn comment-btn" onclick="event.stopPropagation();openReviewComment(\''+item.id+'\',this.parentElement.parentElement)">&#128172; 批注</button>'
+        +'<button class="r-btn audit-btn" onclick="event.stopPropagation();showAuditLog(\''+item.id+'\',this.parentElement.parentElement)">&#128269; 审计</button>'
         +'</div></div>';
     });
     document.getElementById('reviewList').innerHTML=h||'<div style="padding:8px;color:var(--ts);font-size:10px;text-align:center">暂无待审核</div>';
@@ -350,6 +392,7 @@ function regenOne(sid){
 function loadPerfDashboard() {
   fetch('/api/performance/stats').then(function(r){return r.json()}).then(function(d){
     var types=d.by_type||[];
+    var styles=d.by_style||[];
     var h='';
     var maxReads=1;
     types.forEach(function(t){maxReads=Math.max(maxReads,t.avg_reads||0);});
@@ -361,9 +404,43 @@ function loadPerfDashboard() {
         +'<span class="perf-dash-val">'+(t.avg_reads||0).toFixed(0)+'阅</span>'
         +'</div>';
     });
+    if(styles.length>0){
+      h+='<div style="font-size:10px;color:var(--ts);margin:8px 0 2px;font-weight:700">按版本风格</div>';
+      var maxSR=1;
+      styles.forEach(function(s){maxSR=Math.max(maxSR,s.avg_reads||0);});
+      styles.forEach(function(s){
+        var pct=Math.round((s.avg_reads||0)/maxSR*100);
+        h+='<div class="perf-dash-row">'
+          +'<span class="perf-dash-label">'+esc(s.published_style||'-')+'</span>'
+          +'<div class="perf-dash-bar-track"><div class="perf-dash-bar-fill" style="width:'+pct+'%;background:var(--w)"></div></div>'
+          +'<span class="perf-dash-val">'+(s.avg_reads||0).toFixed(0)+'阅</span>'
+          +'</div>';
+      });
+    }
     document.getElementById('perfDashBody').innerHTML=h||'<div style="font-size:10px;color:var(--ts);padding:4px 0">暂无效果数据</div>';
   });
 }
+
+// ============================================================
+// Notifications
+// ============================================================
+function toggleNotifications(){
+  var dd=document.getElementById('notifDropdown');
+  if(dd.classList.contains('hide')){
+    fetch('/api/notifications').then(function(r){return r.json()}).then(function(d){
+      var items=d.items||[];
+      var h='';
+      items.forEach(function(n){
+        var icon=n.status==='success'?'&#9989;':n.status==='fail'?'&#10060;':'&#128276;';
+        h+='<div class="notif-item"><span>'+icon+'</span><div><div class="notif-title">'+esc(n.title||'')+'</div><div class="notif-time">'+(n.time||'').slice(0,16)+'</div></div></div>';
+      });
+      document.getElementById('notifList').innerHTML=h||'<div style="padding:8px;color:var(--ts);font-size:11px;text-align:center">暂无通知</div>';
+      document.getElementById('notifDot').classList.add('hide');
+    });
+    dd.classList.remove('hide');
+  }else{dd.classList.add('hide');}
+}
+function clearNotifications(){document.getElementById('notifList').innerHTML='<div style="padding:8px;color:var(--ts);font-size:11px;text-align:center">已清空</div>';}
 
 // ============================================================
 // Calendar
@@ -372,13 +449,25 @@ function toggleCalendar(){
   var dd=document.getElementById('calendarDropdown');
   if(dd.classList.contains('hide')){
     fetch('/api/calendar').then(function(r){return r.json()}).then(function(d){
-      var h='<div class="cal-add-row"><input id="calNewDate" type="date" value="'+new Date().toISOString().slice(0,10)+'" style="padding:4px 6px;font-size:11px;border:1px solid var(--b);border-radius:4px;width:115px">'
+      var h='';
+      // 统计
+      if(d.stats){
+        h+='<div class="cal-stats">'
+          +'<span>本月 <span class="cal-stat-val">'+d.stats.month_done+'/'+d.stats.month_total+'</span></span>'
+          +'<span>完成率 <span class="cal-stat-val">'+d.stats.completion_rate+'%</span></span>'
+          +'<span>累计完成 <span class="cal-stat-val">'+d.stats.total_done+'</span></span>'
+          +'</div>';
+      }
+      h+='<div class="cal-add-row"><input id="calNewDate" type="date" value="'+new Date().toISOString().slice(0,10)+'" style="padding:4px 6px;font-size:11px;border:1px solid var(--b);border-radius:4px;width:115px">'
         +'<input id="calNewTopic" placeholder="主题" style="padding:4px 6px;font-size:11px;border:1px solid var(--b);border-radius:4px;flex:1">'
         +'<select id="calNewType" style="padding:4px;font-size:10px;border:1px solid var(--b);border-radius:4px"><option value="tech">技术</option><option value="policy">政策</option><option value="event">事件</option></select>'
+        +'<input id="calNewSeries" placeholder="系列" style="padding:4px 6px;font-size:10px;border:1px solid var(--b);border-radius:4px;width:60px">'
         +'<button onclick="calAdd()" style="padding:4px 8px;background:var(--p);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:10px">+</button></div>';
       (d.items||[]).forEach(function(item){
         h+='<div class="cal-item'+(item.done?' done':'')+(item.priority==='high'?' priority-high':'')+'" title="点击编辑">'
+          +'<input type="checkbox" class="cal-check"'+(item.done?' checked':'')+' onchange="event.stopPropagation();calMarkDone(\''+item.date+'\',this.checked)" title="标记完成">'
           +'<span class="cal-date">'+item.date.slice(5)+'</span>'
+          +(item.series?'<span class="cal-series">'+esc(item.series)+'</span>':'')
           +'<span class="cal-topic" contenteditable="true" onblur="calUpdate(\''+item.date+'\',this.textContent,\''+item.type+'\')">'+esc(item.topic)+'</span>'
           +'<select onchange="calUpdate(\''+item.date+'\',\'\',this.value)" style="font-size:9px;border:1px solid var(--b);border-radius:3px;padding:1px 2px">'
             +'<option value="tech"'+(item.type==='tech'?' selected':'')+'>技术</option>'
@@ -388,6 +477,11 @@ function toggleCalendar(){
           +'<span class="cal-del" onclick="event.stopPropagation();calDelete(\''+item.date+'\')" title="删除">x</span>'
           +'</div>';
       });
+      // 批量导入区
+      h+='<div class="cal-batch"><div class="cal-batch-header" onclick="var b=this.nextElementSibling;b.classList.toggle(\'hide\')">&#128194; 批量导入选题</div>'
+        +'<div class="cal-batch-body hide"><textarea id="calBatchInput" placeholder="每行一个选题，格式：日期,主题,类型,优先级,系列&#10;例：2026-06-01,低温干化技术详解,tech,high,技术系列"></textarea>'
+        +'<button onclick="calBatchImport()" style="margin-top:4px;padding:4px 12px;background:var(--p);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:10px">批量导入</button>'
+        +'</div></div>';
       dd.innerHTML=h||'<div style="padding:8px;color:var(--ts);font-size:11px;text-align:center">近期无排期</div>';
     });
     dd.classList.remove('hide');
@@ -398,8 +492,11 @@ function calAdd(){
   var d=document.getElementById('calNewDate').value;
   var t=document.getElementById('calNewTopic').value.trim();
   var tp=document.getElementById('calNewType').value;
+  var series=document.getElementById('calNewSeries').value.trim();
   if(!d||!t){toast('请填写日期和主题','error');return;}
-  fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:d,topic:t,type:tp})})
+  var params=new URLSearchParams({date:d,topic:t,type:tp});
+  if(series) params.set('series',series);
+  fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params})
     .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已添加');toggleCalendar();toggleCalendar();}});
 }
 function calUpdate(date,topic,type){
@@ -413,6 +510,27 @@ function calDelete(date){
   if(!confirm('删除 '+date+' 的排期？'))return;
   fetch('/api/calendar',{method:'DELETE',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:date})})
     .then(function(r){return r.json()}).then(function(d){if(d.ok){toast('已删除');toggleCalendar();toggleCalendar();}});
+}
+function calMarkDone(date, done){
+  fetch('/api/calendar',{method:'PUT',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:date,done:done?'true':'false'})})
+    .then(function(r){return r.json()}).then(function(d){if(d.ok)toast(done?'已标记完成':'已取消完成');});
+}
+function calBatchImport(){
+  var text=document.getElementById('calBatchInput').value.trim();
+  if(!text){toast('请粘贴选题数据','error');return;}
+  var lines=text.split('\n'),count=0;
+  function importNext(i){
+    if(i>=lines.length){toast('成功导入 '+count+' 条');toggleCalendar();toggleCalendar();return;}
+    var line=lines[i].trim();if(!line){importNext(i+1);return;}
+    var parts=line.split(','),date=parts[0]||'',topic=parts[1]||'',type=parts[2]||'tech',priority=parts[3]||'normal',series=parts[4]||'';
+    if(!date||!topic){importNext(i+1);return;}
+    var params=new URLSearchParams({date:date,topic:topic,type:type,priority:priority});
+    if(series) params.set('series',series);
+    fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params})
+      .then(function(r){return r.json()}).then(function(d){if(d.ok)count++;importNext(i+1);})
+      .catch(function(){importNext(i+1);});
+  }
+  importNext(0);
 }
 
 // ============================================================
@@ -512,10 +630,37 @@ function finalizeResult(data){
     tabsHtml+='</div>';state.versions[msgId]=versionData;
   }
   el.id=msgId;
+  // SEO + 多形态面板
+  var seoHtml='';
+  if(data.social_summary||data.email_version||(data.seo_titles&&data.seo_titles.length)){
+    seoHtml='<div class="seo-panel">'
+      +'<div class="seo-header" onclick="var b=this.nextElementSibling;b.classList.toggle(\'hide\')">&#128202; 多形态内容 &amp; SEO</div>'
+      +'<div class="seo-body">';
+    if(data.social_summary){
+      seoHtml+='<div class="seo-section"><div class="seo-label">&#128241; 朋友圈摘要</div><div class="seo-text" id="'+msgId+'-social">'+esc(data.social_summary)+'</div>'
+        +'<button class="seo-copy" onclick="navigator.clipboard.writeText(document.getElementById(\''+msgId+'-social\').textContent);toast(\'已复制\')">复制</button></div>';
+    }
+    if(data.email_version){
+      seoHtml+='<div class="seo-section"><div class="seo-label">&#128231; 邮件推送版</div><div class="seo-text" id="'+msgId+'-email">'+renderMarkdown(data.email_version)+'</div>'
+        +'<button class="seo-copy" onclick="navigator.clipboard.writeText(document.getElementById(\''+msgId+'-email\').textContent);toast(\'已复制\')">复制</button></div>';
+    }
+    if(data.meta_description){
+      seoHtml+='<div class="seo-section"><div class="seo-label">&#128269; Meta Description</div><div class="seo-text" id="'+msgId+'-meta">'+esc(data.meta_description)+'</div>'
+        +'<button class="seo-copy" onclick="navigator.clipboard.writeText(document.getElementById(\''+msgId+'-meta\').textContent);toast(\'已复制\')">复制</button></div>';
+    }
+    if(data.seo_keywords&&data.seo_keywords.length){
+      seoHtml+='<div class="seo-section"><div class="seo-label">&#127991; SEO 关键词</div><div class="seo-kw">'+data.seo_keywords.map(function(k){return '<span class="kw-tag">'+esc(k)+'</span>';}).join('')+'</div></div>';
+    }
+    if(data.seo_titles&&data.seo_titles.length){
+      seoHtml+='<div class="seo-section"><div class="seo-label">&#128196; SEO 标题变体</div><div class="seo-titles">'+data.seo_titles.map(function(t,i){return '<div class="seo-title-row"><span>'+(i+1)+'.</span> '+esc(t)+'</div>';}).join('')+'</div></div>';
+    }
+    seoHtml+='</div></div>';
+  }
   el.innerHTML=
     '<div class="title">'+esc(data.title||'')+'</div>'
     +'<div class="body article-body" id="'+msgId+'-body">'+renderMarkdown(data.body||'')+'</div>'
     +tabsHtml
+    +seoHtml
     +(data.image_url?'<img src="'+data.image_url+'" class="article-img" onerror="this.style.display=\'none\'">':'')+'<div class="meta-row">'
       +'<span class="badge score">&#11088; '+(data.score||'-')+' 分</span>'
       +'<span class="badge type">'+esc(data.content_type||'-')+'</span>'
@@ -529,6 +674,7 @@ function finalizeResult(data){
       +'<button class="action-btn" onclick="feedback(\'换政策角度\')">&#128220; 政策角度</button>'
       +'<button class="action-btn" onclick="feedback(\'换技术角度\')">&#9881; 技术角度</button>'
       +'<button class="action-btn" onclick="toggleCustomFb(\''+msgId+'\')">&#128172; 自定义</button>'
+      +'<button class="action-btn keep-btn" onclick="keepVersion(\''+msgId+'\')">&#9733; 选用此版</button>'
     +'</div>'
     +'<div class="custom-feedback-wrap" id="cfb-'+msgId+'">'
       +'<input id="cfbInput-'+msgId+'" placeholder="输入自定义反馈...">'
@@ -560,8 +706,8 @@ function sendCustomFb(msgId){
         if(v.done){setLoading(false);return;}
         buf+=decoder.decode(v.value,{stream:true});var lines=buf.split('\n');buf=lines.pop();
         lines.forEach(function(l){if(!l.startsWith('data: '))return;
-          try{var d=JSON.parse(l.slice(6));if(d.stage)updateProgress(d.stage);else if(d.done){finalizeResult(d);loadSessions();loadStats();}}
-          catch(e){}
+          try{var d=JSON.parse(l.slice(6));if(d.stage)updateProgress(d.stage);else if(d.done){finalizeResult(d);loadSessions();loadStats();}else if(d.stopped){removeProgress();setLoading(false);toast('已取消生成','error');}else if(d.heartbeat){/* keepalive */}}
+          catch(e){console.error('[SSE] parse error:',e.message,'raw:',l.slice(0,200));}
         });pump();
       }).catch(function(err){removeProgress();setLoading(false);toast('请求失败: '+(err.message||'未知错误'),'error');});}
       pump();
@@ -572,7 +718,7 @@ function switchVersion(msgId,idx){
   var v=state.versions[msgId]&&state.versions[msgId][idx];if(!v)return;
   var el=document.getElementById(msgId);if(!el)return;
   el.querySelector('.title').textContent=v.title;
-  var body=el.querySelector('.body');body.textContent=v.body||'';body.classList.remove('expanded');
+  var body=el.querySelector('.body');body.innerHTML=renderMarkdown(v.body||'');body.classList.remove('expanded');
   el.querySelectorAll('.version-tab').forEach(function(t,i){t.classList.toggle('on',i===idx);});
   var sb=el.querySelector('.badge.score');if(sb)sb.textContent='⭐ '+(v.score||'-')+' 分';
   el.scrollIntoView({behavior:'smooth',block:'start'});
@@ -580,7 +726,7 @@ function switchVersion(msgId,idx){
 
 function copyContent(msgId,btn){
   var body=document.getElementById(msgId+'-body'),title=document.getElementById(msgId).querySelector('.title');
-  var text=(title?title.textContent+'\n\n':'')+(body?body.textContent:'');
+  var text=(title?title.textContent+'\n\n':'')+(body?stripHTML(body.innerHTML):'');
   navigator.clipboard.writeText(text).then(function(){
     btn.classList.add('copy-ok');btn.innerHTML='&#10003; 已复制';
     setTimeout(function(){btn.classList.remove('copy-ok');btn.innerHTML='&#128203; 复制全文';},2000);
@@ -629,8 +775,8 @@ function send(){
         if(v.done){setLoading(false);return;}
         buf+=decoder.decode(v.value,{stream:true});var lines=buf.split('\n');buf=lines.pop();
         lines.forEach(function(l){if(!l.startsWith('data: '))return;
-          try{var d=JSON.parse(l.slice(6));if(d.stage)updateProgress(d.stage);else if(d.done){finalizeResult(d);loadSessions();loadStats();}}
-          catch(e){}
+          try{var d=JSON.parse(l.slice(6));if(d.stage)updateProgress(d.stage);else if(d.done){finalizeResult(d);loadSessions();loadStats();}else if(d.stopped){removeProgress();setLoading(false);toast('已取消生成','error');}else if(d.heartbeat){/* keepalive */}}
+          catch(e){console.error('[SSE] parse error:',e.message,'raw:',l.slice(0,200));}
         });pump();
       }).catch(function(err){removeProgress();setLoading(false);toast('请求失败: '+(err.message||'未知错误'),'error');});}
       pump();
@@ -700,7 +846,236 @@ function renderMarkdown(t) {
   t = t.replace(/\n/g, "<br>");
   return "<p>" + t + "</p>";
 }
-function esc(s){if(!s)return '';var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+function keepVersion(msgId){
+  var el=document.getElementById(msgId);
+  if(!el) return;
+  var title=el.querySelector('.title').textContent;
+  // 获取当前显示的版本风格
+  var currentStyle='';
+  var tabs=el.querySelectorAll('.version-tab.on');
+  if(tabs.length>0) currentStyle=tabs[0].textContent;
+  if(!currentStyle&&state.versions[msgId]){
+    // fallback: first version's style
+    var vkeys=Object.keys(state.versions[msgId]);
+    if(vkeys.length>0) currentStyle=state.versions[msgId][vkeys[0]].style;
+  }
+  // 尝试从已加载会话中匹配
+  var sid=state.sid;
+  if(!sid&&state.sessions.length>0){
+    for(var i=0;i<state.sessions.length;i++){
+      if(state.sessions[i].title===title){sid=state.sessions[i].id;break;}
+    }
+    if(!sid) sid=state.sessions[0].id;
+  }
+  if(!sid){toast('无法定位会话，请先生成内容','error');return;}
+  el.querySelectorAll('.keep-btn').forEach(function(b){b.textContent='已选用';b.style.color='#10b981';b.style.borderColor='#10b981';});
+  // 同时批准 + 记录版本风格
+  var body=new URLSearchParams({session_id:sid});
+  fetch('/api/review/approve',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
+    .then(function(){
+      if(currentStyle){
+        var sb=new URLSearchParams({session_id:sid,style:currentStyle});
+        fetch('/api/performance/style',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:sb});
+      }
+      toast('已标记为选用版本');loadPendingReviews();loadSessions();loadStats();loadPerfDashboard();
+    })
+    .catch(function(){toast('标记失败','error');});
+}
+
+
+function stripHTML(h){var d=document.createElement('div');d.innerHTML=h;var nl=String.fromCharCode(10);var tables=d.querySelectorAll('table');for(var i=0;i<tables.length;i++){tables[i].insertAdjacentText('beforebegin',nl);tables[i].insertAdjacentText('afterend',nl)}var lis=d.querySelectorAll('li');for(var i=0;i<lis.length;i++){lis[i].insertAdjacentText('beforebegin','- ');lis[i].insertAdjacentText('afterend',nl)}var brs=d.querySelectorAll('br');for(var i=0;i<brs.length;i++){brs[i].insertAdjacentText('afterend',nl)}var blocks=d.querySelectorAll('h2,h3,h4,p,hr,ul');for(var i=0;i<blocks.length;i++){blocks[i].insertAdjacentText('afterend',nl+nl)}var txt=d.textContent;return txt.replace(new RegExp(nl+'{3,}','g'),nl+nl).trim()}function esc(s){if(!s)return '';var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+// ============================================================
+// 质量趋势
+// ============================================================
+function loadTrends(){
+  fetch('/api/stats/trends?days=60').then(function(r){return r.json()}).then(function(d){
+    var h='';
+    // 评分分布
+    if(d.distribution&&d.distribution.length){
+      h+='<div style="font-size:10px;color:var(--ts);margin-bottom:4px;font-weight:700">评分分布 (60天)</div>';
+      d.distribution.forEach(function(b){
+        h+='<div class="perf-dash-row"><span class="perf-dash-label">'+esc(b.bucket)+'</span>'
+          +'<div class="perf-dash-bar-track"><div class="perf-dash-bar-fill" style="width:'+Math.round(b.cnt/Math.max.apply(null,d.distribution.map(function(x){return x.cnt}))*100)+'%;background:var(--g)"></div></div>'
+          +'<span class="perf-dash-val">'+b.cnt+'篇</span></div>';
+      });
+    }
+    // 覆盖率
+    if(d.coverage){
+      h+='<div style="font-size:10px;color:var(--ts);margin:6px 0">'
+        +'活跃 '+d.coverage.active_days+' 天 &middot; 共 '+d.coverage.total_articles+' 篇'
+        +'</div>';
+    }
+    // 按类型
+    if(d.by_type&&d.by_type.length){
+      h+='<div style="font-size:10px;color:var(--ts);margin:4px 0;font-weight:700">按类型均分</div>';
+      d.by_type.forEach(function(t){
+        var color=t.avg_score>=85?'var(--g)':t.avg_score>=75?'var(--w)':'var(--r)';
+        h+='<div class="perf-dash-row"><span class="perf-dash-label">'+esc(t.content_type||'-')+'</span>'
+          +'<div class="perf-dash-bar-track"><div class="perf-dash-bar-fill" style="width:'+Math.round(t.avg_score)+'%;background:'+color+'"></div></div>'
+          +'<span class="perf-dash-val">'+t.avg_score+'分</span></div>';
+      });
+    }
+    // 每日趋势（最近14天）
+    if(d.daily&&d.daily.length){
+      var recent=d.daily.slice(-14);
+      var maxC=Math.max.apply(null,recent.map(function(x){return x.cnt||0}))||1;
+      h+='<div style="font-size:10px;color:var(--ts);margin:8px 0 2px;font-weight:700">每日产出 (14天)</div>';
+      h+='<div style="display:flex;align-items:flex-end;gap:2px;height:40px;padding:2px 0">';
+      recent.forEach(function(day){
+        var hPct=Math.round((day.cnt||0)/maxC*100);
+        h+='<div title="'+day.day+': '+(day.avg_score||'-')+'分" style="flex:1;background:var(--p);height:'+Math.max(hPct,4)+'%;border-radius:2px 2px 0 0;opacity:0.7"></div>';
+      });
+      h+='</div>';
+    }
+    document.getElementById('trendsBody').innerHTML=h||'<div style="font-size:10px;color:var(--ts);padding:4px 0">暂无趋势数据</div>';
+  }).catch(function(){document.getElementById('trendsBody').innerHTML='<div style="font-size:10px;color:var(--r)">加载失败</div>'});
+}
+
+function loadCoverage(){
+  fetch('/api/stats/coverage?days=60').then(function(r){return r.json()}).then(function(d){
+    var h='';
+    h+='<div class="perf-dash-row"><span class="perf-dash-label">已生成</span><span class="perf-dash-val">'+(d.total_generated||0)+'篇</span></div>';
+    h+='<div class="perf-dash-row"><span class="perf-dash-label">待排期</span><span class="perf-dash-val">'+(d.calendar_pending||0)+'篇</span></div>';
+    // 类型覆盖
+    var tc=d.type_coverage||{};
+    Object.keys(tc).forEach(function(ct){
+      h+='<div class="perf-dash-row"><span class="perf-dash-label">'+esc(ct)+'</span><span class="perf-dash-val">'+tc[ct].count+'篇</span></div>';
+    });
+    // 缺口
+    var gaps=d.gaps||[];
+    if(gaps.length>0){
+      h+='<div style="font-size:10px;color:var(--r);margin:4px 0;font-weight:700">选题缺口</div>';
+      gaps.forEach(function(g){
+        h+='<div class="perf-dash-row"><span class="perf-dash-label">'+esc(g.type)+'</span><span class="perf-dash-val" style="color:var(--r)">缺'+g.gap+'篇</span></div>';
+      });
+    }
+    document.getElementById('coverageBody').innerHTML=h||'<div style="font-size:10px;color:var(--ts);padding:4px 0">暂无数据</div>';
+  }).catch(function(){document.getElementById('coverageBody').innerHTML='<div style="font-size:10px;color:var(--r)">加载失败</div>'});
+}
+
+// ============================================================
+// 知识库管理
+// ============================================================
+function toggleKBManager(){
+  var el=document.getElementById('kbManager');
+  el.classList.toggle('hide');
+  if(!el.classList.contains('hide')) loadKBList();
+}
+function loadKBList(){
+  var q=(document.getElementById('kbSearchInput').value||'').toLowerCase();
+  fetch('/api/knowledge').then(function(r){return r.json()}).then(function(d){
+    var h='';
+    (d.files||[]).forEach(function(f){
+      if(q && f.title.toLowerCase().indexOf(q)===-1 && f.filename.toLowerCase().indexOf(q)===-1 && f.category.toLowerCase().indexOf(q)===-1) return;
+      var catBadge=f.category?'<span class="kb-cat">'+esc(f.category)+'</span>':'';
+      h+='<div class="kb-file" onclick="kbEdit(\''+esc(f.path)+'\')">'
+        +'<span class="kb-fname">'+catBadge+esc(f.title||f.filename)+'</span>'
+        +'<span class="kb-meta">'+(f.size>1024?(f.size/1024).toFixed(1)+'KB':f.size+'B')+'</span>'
+        +'<span class="kb-del" onclick="event.stopPropagation();kbDelete(\''+esc(f.path)+'\')">x</span>'
+        +'</div>';
+    });
+    document.getElementById('kbList').innerHTML=h||'<div style="font-size:10px;color:var(--ts);padding:8px;text-align:center">'+(q?'无匹配文件':'暂无知识库文件')+'</div>';
+  });
+}
+function kbAddFile(){
+  document.getElementById('kbEditPath').value='';
+  document.getElementById('kbEditContent').value='';
+  document.getElementById('kbEditor').classList.remove('hide');
+}
+function kbEdit(path){
+  fetch('/api/knowledge/'+encodeURIComponent(path)).then(function(r){return r.json()}).then(function(d){
+    if(d.error){toast(d.error,'error');return;}
+    document.getElementById('kbEditPath').value=d.path;
+    document.getElementById('kbEditContent').value=d.content;
+    document.getElementById('kbEditor').classList.remove('hide');
+  });
+}
+function kbSave(){
+  var path=document.getElementById('kbEditPath').value.trim();
+  var content=document.getElementById('kbEditContent').value;
+  if(!path||!content){toast('请填写路径和内容','error');return;}
+  if(!path.endsWith('.md')){toast('文件名必须以 .md 结尾','error');return;}
+  fetch('/api/knowledge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({path:path,content:content})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){toast(d.error,'error');return;}
+      toast('已保存');document.getElementById('kbEditor').classList.add('hide');loadKBList();
+    });
+}
+function kbDelete(path){
+  if(!confirm('删除 '+path+' ？'))return;
+  fetch('/api/knowledge',{method:'DELETE',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({path:path})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){toast(d.error,'error');return;}
+      toast('已删除');loadKBList();
+    });
+}
+
+// ============================================================
+// 审核评论
+// ============================================================
+var _reviewCommentSid=null;
+function openReviewComment(sid, el){
+  _reviewCommentSid=sid;
+  var existing=el.querySelector('.review-comments-inline');
+  if(existing){existing.remove();return;}
+  var div=document.createElement('div');
+  div.className='review-comments-inline';
+  div.innerHTML='<textarea class="rc-input" placeholder="添加批注..."></textarea>'
+    +'<button class="rc-send" onclick="sendReviewComment(\''+sid+'\',this)">发送批注</button>'
+    +'<div class="rc-list" id="rcList-'+sid+'"></div>';
+  el.appendChild(div);
+  loadReviewComments(sid);
+}
+function sendReviewComment(sid, btn){
+  var textarea=btn.parentElement.querySelector('.rc-input');
+  var comment=textarea.value.trim();
+  if(!comment){toast('请输入批注内容','error');return;}
+  fetch('/api/review/comment',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({session_id:sid,comment:comment})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.ok){textarea.value='';loadReviewComments(sid);toast('批注已添加');}
+    });
+}
+function showAuditLog(sid, el){
+  var existing=el.querySelector('.review-audit-inline');
+  if(existing){existing.remove();return;}
+  var div=document.createElement('div');
+  div.className='review-audit-inline';
+  div.innerHTML='<div style="font-size:10px;color:var(--ts);margin-bottom:4px">&#128269; 审核链路</div><div class="al-list" id="alList-'+sid+'">加载中...</div>';
+  el.appendChild(div);
+  fetch('/api/review/audit/'+sid).then(function(r){return r.json()}).then(function(d){
+    var h='';
+    (d.log||[]).forEach(function(entry){
+      var actionLabel=entry.action==='approve'?'&#9989; 通过':entry.action==='reject'?'&#10060; 驳回':entry.action;
+      h+='<div class="al-item">'
+        +'<span class="al-action">'+actionLabel+'</span>'
+        +'<span class="al-operator">'+esc(entry.operator||'system')+'</span>'
+        +'<span class="al-time">'+(entry.created_at||'').slice(0,16)+'</span>'
+        +(entry.from_status?'<span class="al-from">'+esc(entry.from_status)+'</span>':'')
+        +'<span class="al-arrow">&#8594;</span>'
+        +'<span class="al-to">'+esc(entry.to_status)+'</span>'
+        +(entry.note?'<div class="al-note">'+esc(entry.note)+'</div>':'')
+        +'</div>';
+    });
+    document.getElementById('alList-'+sid).innerHTML=h||'<div style="font-size:10px;color:var(--ts)">暂无审计记录</div>';
+  });
+}
+
+function loadReviewComments(sid){
+  fetch('/api/review/comments/'+sid).then(function(r){return r.json()}).then(function(d){
+    var h='';
+    (d.comments||[]).forEach(function(c){
+      h+='<div class="rc-item"><span class="rc-author">'+esc(c.author||'reviewer')+'</span>'
+        +'<span class="rc-stage">'+esc(c.stage||'')+'</span>'
+        +'<span class="rc-time">'+(c.created_at||'').slice(0,16)+'</span>'
+        +'<div class="rc-text">'+esc(c.comment)+'</div></div>';
+    });
+    var el=document.getElementById('rcList-'+sid);
+    if(el)el.innerHTML=h||'<div style="font-size:10px;color:var(--ts)">暂无批注</div>';
+  });
+}
+
 </script>
 </body>
 </html>

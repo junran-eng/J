@@ -1,0 +1,12 @@
+2026-05-26 21:51:05,423 [INFO] ========== 启动 ==========
+2026-05-26 21:51:05,669 [INFO] [SQLite] vacuum G:\sad\ai-marketing-workflow\memory\conversations.db done
+2026-05-26 21:51:05,672 [INFO] [SQLite] vacuum G:\sad\ai-marketing-workflow\memory\vectors.db done
+2026-05-26 21:51:05,684 [WARNING] [KB] directory not found: G:\sad\ai-marketing-workflow\knowledge_base
+2026-05-26 21:51:06,661 [INFO] Scheduler started
+2026-05-26 21:51:06,663 [INFO] Added job "create_app.<locals>.mkjob.<locals>.j" to job store "default"
+2026-05-26 21:51:06,663 [INFO] Added job "create_app.<locals>.mkjob.<locals>.j" to job store "default"
+2026-05-26 21:51:06,663 [INFO] [Sched] 已恢复 2 个定时任务
+2026-05-26 21:51:06,666 [WARNING] Run time of job "create_app.<locals>.mkjob.<locals>.j (trigger: date[2026-05-25 22:20:00 UTC+08:00], next run at: 2026-05-25 22:20:00 UTC+08:00)" was missed by 23:31:06.666716
+2026-05-26 21:51:06,666 [INFO] Removed job web_a993b90c
+2026-05-26 21:51:06,667 [INFO] Removed job web_51bbb9c6
+2026-05-26 21:51:06,667 [WARNING] Run time of job "create_app.<locals>.mkjob.<locals>.j (trigger: date[2026-05-25 22:50:00 UTC+08:00], next run at: 2026-05-25 22:50:00 UTC+08:00)" was missed by 23:01:06.667715

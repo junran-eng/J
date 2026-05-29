@@ -28,7 +28,7 @@ def _prune_outputs(output_dir, max_files=None):
     try:
         txt_files = sorted(
             [f for f in os.listdir(output_dir) if f.endswith(".txt")],
-            key=lambda x: os.path.getctime(os.path.join(output_dir, x))
+            key=lambda x: os.path.getmtime(os.path.join(output_dir, x))
         )
         while len(txt_files) > max_files:
             oldest = txt_files.pop(0)
@@ -45,11 +45,12 @@ def _safe_filename(topic):
     safe = re.sub(r'\s+', '_', safe.strip())
     return safe[:30]
 
-def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_progress=None, fast=False, content_type=None, stop_event=None):
+def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_progress=None, fast=False, content_type=None, stop_event=None, acquire_timeout=300):
     """单次完整推广文生成流水线
 
     Args:
         fast: True 时只生成标准版（跳过数据版和故事版），省 2/3 LLM 调用
+        acquire_timeout: 信号量获取超时秒数，0 表示不等待
     """
     def prog(msg):
         logger.info(msg)
@@ -62,7 +63,9 @@ def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_
     def llm(system, user):
         return call_llm(system, user, model, api_key, api_base)
 
-    _task_sem.acquire()
+    acquired = _task_sem.acquire(timeout=acquire_timeout)
+    if not acquired:
+        raise RuntimeError("系统繁忙，请稍后重试（当前并发任务已满）")
     try:
         start = time.time()
         init_db()
@@ -78,7 +81,7 @@ def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_
             prog("[RAG] 检索到历史相关文章")
 
         # Step 3: 知识库检索
-        kb_text = kb_retrieve(topic, keywords)
+        kb_text = kb_retrieve(topic, keywords, api_key, api_base)
         if kb_text:
             prog(f"[KB] 检索到相关片段 {len(kb_text)}字")
 
@@ -107,6 +110,8 @@ def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_
         # Step 7: Phase3 评审排序
         prog("[Phase3] 评审...")
         versions = evaluate_and_pick(versions, llm, content_type=ct)
+        if not versions:
+            raise RuntimeError("[Phase3] 所有版本生成失败，无可用版本")
         best = versions[0]
         prog(f"[Phase3] 最优: {best['style']} ({best['score']}分)")
 
@@ -135,11 +140,22 @@ def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_
             "scrape_status": ss,
             "content_type": tn,
             "evaluation": {"overall_score": best["score"], "report": "", "suggestions": []},
+            # SEO + 多形态
+            "meta_description": best.get("meta_description", ""),
+            "seo_keywords": best.get("seo_keywords", []),
+            "seo_titles": best.get("seo_titles", []),
+            "social_summary": best.get("social_summary", ""),
+            "email_version": best.get("email_version", ""),
             "versions": [
                 {
                     "style": v["style"], "title": v["title"],
-                    "score": v["score"], "body": v["body"][:300] + "...",
-                    "image_prompt": v["image_prompt"],
+                    "score": v["score"], "body": v["body"],
+                    "image_prompt": v.get("image_prompt", ""),
+                    "meta_description": v.get("meta_description", ""),
+                    "seo_keywords": v.get("seo_keywords", []),
+                    "seo_titles": v.get("seo_titles", []),
+                    "social_summary": v.get("social_summary", ""),
+                    "email_version": v.get("email_version", ""),
                 }
                 for v in versions
             ],
@@ -150,7 +166,22 @@ def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_
             os.makedirs(output_dir, exist_ok=True)
             fn = os.path.join(output_dir, f"推广_{_safe_filename(topic)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
             with open(fn, "w", encoding="utf-8") as f:
-                f.write(f"{'='*60}\n标题：{result['final_title']}\n{'='*60}\n\n{result['final_body']}\n\n评分：{best['score']}/100\n")
+                f.write(f"{'='*60}\n标题：{result['final_title']}\n{'='*60}\n\n{result['final_body']}\n\n")
+                f.write(f"{'='*60}\n评分：{best['score']}/100 | 类型：{tn} | 耗时：{elapsed}s\n{'='*60}\n\n")
+                # SEO + 多形态
+                if best.get("meta_description"):
+                    f.write(f"--- Meta Description ---\n{best['meta_description']}\n\n")
+                if best.get("seo_keywords"):
+                    f.write(f"--- SEO 关键词 ---\n{', '.join(best['seo_keywords'])}\n\n")
+                if best.get("seo_titles"):
+                    f.write(f"--- SEO 标题变体 ---\n")
+                    for i, st in enumerate(best["seo_titles"], 1):
+                        f.write(f"  {i}. {st}\n")
+                    f.write("\n")
+                if best.get("social_summary"):
+                    f.write(f"--- 朋友圈摘要 ---\n{best['social_summary']}\n\n")
+                if best.get("email_version"):
+                    f.write(f"--- 邮件推送版 ---\n{best['email_version']}\n")
 
         save_result(topic, ct, result, output_dir)
 
@@ -163,5 +194,6 @@ def run_pipeline(topic, keywords, model, api_key, api_base, output_dir=None, on_
         prog("[stop] user cancelled")
         return {"topic": topic, "final_title": "", "final_body": "", "evaluation": {"overall_score": 0}, "stopped": True}
     finally:
-        _task_sem.release()
+        if acquired:
+            _task_sem.release()
 

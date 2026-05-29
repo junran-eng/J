@@ -36,13 +36,13 @@ def get_brand_profile():
 
 def get_content_signals():
     event_s = policy_s = tech_s = None
-    m = re.search(r"事件[信号|].*?[：:]\s*(.*?)(?:\n|$)", _types)
+    m = re.search(r"事件(?:信号)?\s*[：:]\s*(.*?)(?:\n|$)", _types)
     if m:
         event_s = [s.strip() for s in m.group(1).split("、")]
-    m = re.search(r"政策[信号|].*?[：:]\s*(.*?)(?:\n|$)", _types)
+    m = re.search(r"政策(?:信号)?\s*[：:]\s*(.*?)(?:\n|$)", _types)
     if m:
         policy_s = [s.strip() for s in m.group(1).split("、")]
-    m = re.search(r"技术[信号|].*?[：:]\s*(.*?)(?:\n|$)", _types)
+    m = re.search(r"技术(?:信号)?\s*[：:]\s*(.*?)(?:\n|$)", _types)
     if m:
         tech_s = [s.strip() for s in m.group(1).split("、")]
 
@@ -72,7 +72,15 @@ def build_editor_prompt():
         f"你是「广东吉康环境系统科技有限公司」公众号主编。\n"
         f"品牌准则: {profile}\n"
         f"写作框架: PAS公式（Problem-Agitate-Solve），1500-2500字，文末公司简介。\n"
-        f'输出JSON: {{"title":"...","body":"...","image_prompt":"..."}}'
+        f"同时生成以下附加内容：\n"
+        f"1. meta_description: 120-160字的SEO摘要，包含核心关键词\n"
+        f"2. seo_keywords: 5-8个长尾关键词数组\n"
+        f"3. seo_titles: 3个SEO友好的标题变体（含疑问句、数字型、HOWTO型各一）\n"
+        f"4. social_summary: 朋友圈/微博摘要，140字以内，口语化有网感\n"
+        f"5. email_version: 邮件推送版，200-300字，正式商务语气\n"
+        f'输出JSON: {{"title":"...","body":"...","image_prompt":"...",'
+        f'"meta_description":"...","seo_keywords":["..."],"seo_titles":["...","...","..."],'
+        f'"social_summary":"...","email_version":"..."}}'
     )
 
 

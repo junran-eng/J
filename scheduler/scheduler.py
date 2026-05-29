@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # scheduler/scheduler.py — 定时调度
 # ============================================================
 import logging, sys, threading
@@ -23,7 +23,7 @@ def run_schedule(topic, keywords, model, cron=None, interval=None, at=None):
     def job():
         from infra.notify import notify_task_result
         try:
-            r = run_pipeline(topic, keywords, model, api_key, api_base, output_dir)
+            r = run_pipeline(topic, keywords, model, api_key, api_base, output_dir, stop_event=threading.Event())
             notify_task_result(topic, r["evaluation"]["overall_score"], r["elapsed_seconds"], True)
         except Exception as e:
             logger.error("[定时] 失败: %s", e)

@@ -64,7 +64,7 @@ def type_label(content_type):
 
 def reload_signals():
     """热重载关键词信号"""
-    global EVENT_SIGNALS, POLICY_SIGNALS, TECH_SIGNALS
+    global EVENT_SIGNALS, POLICY_SIGNALS, TECH_SIGNALS, _signals
     _signals = reload_prompts()
     EVENT_SIGNALS = _signals["event"]
     POLICY_SIGNALS = _signals["policy"]
